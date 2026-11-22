@@ -1,6 +1,7 @@
 #include "Checksum.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -20,6 +21,20 @@
 
 namespace bq {
 namespace {
+std::uint32_t updateCrc(std::uint32_t crc, unsigned char byte) {
+    static const auto table = [] {
+        std::array<std::uint32_t, 256> values{};
+        for (std::uint32_t n = 0; n < values.size(); ++n) {
+            auto value = n << 24;
+            for (int bit = 0; bit < 8; ++bit)
+                value = (value << 1) ^ ((value & 0x80000000u) ? 0x04c11db7u : 0u);
+            values[n] = value;
+        }
+        return values;
+    }();
+    return (crc << 8) ^ table[(crc >> 24) ^ byte];
+}
+
 class Descriptor {
     int fd_;
 
@@ -67,6 +82,88 @@ Checksum::~Checksum() { ::close(directory_); }
 bool Checksum::validName(const std::string& name) {
     return !name.empty() && name != "." && name != ".." &&
            name.find('/') == std::string::npos && name.find('\0') == std::string::npos;
+}
+
+std::optional<ChecksumResult> Checksum::slice(const std::string& name, ChecksumProgress& progress) const {
+    if (!validName(name)) {
+        ChecksumResult result;
+        result.error = "Choose a file directly inside the configured input folder.";
+        return result;
+    }
+    return sliceInput(::openat(directory_, name.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC),
+                      progress, pool_);
+}
+
+std::optional<ChecksumResult> Checksum::slicePath(const std::filesystem::path& path,
+                                                  ChecksumProgress& progress, BufferPool& pool) {
+    if (!path.is_absolute() || path.native().find('\0') != std::string::npos) {
+        ChecksumResult result;
+        result.error = "Choose a local file with an absolute path.";
+        return result;
+    }
+    return sliceInput(::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC), progress, pool);
+}
+
+std::optional<ChecksumResult> Checksum::sliceInput(int descriptor, ChecksumProgress& progress,
+                                                   BufferPool& pool) {
+    Descriptor file(descriptor);
+    auto fail = [](const char* message) {
+        ChecksumResult result;
+        result.error = message;
+        return result;
+    };
+    struct stat info {};
+    if (descriptor < 0 || ::fstat(descriptor, &info) != 0 ||
+        !S_ISREG(info.st_mode) || info.st_size < 0)
+        return fail("Could not open a regular file for Round Robin.");
+    if (!progress.initialized) {
+        progress.size = info.st_size;
+        progress.device = info.st_dev;
+        progress.inode = info.st_ino;
+        progress.modifiedSeconds = info.st_mtim.tv_sec;
+        progress.modifiedNanoseconds = info.st_mtim.tv_nsec;
+        progress.initialized = true;
+    }
+    auto sameFile = [&] {
+        return info.st_size >= 0 && static_cast<std::uintmax_t>(info.st_size) == progress.size &&
+               info.st_dev == progress.device && info.st_ino == progress.inode &&
+               info.st_mtim.tv_sec == progress.modifiedSeconds && info.st_mtim.tv_nsec == progress.modifiedNanoseconds;
+    };
+    if (!sameFile())
+        return fail("File changed during Round Robin processing.");
+
+    auto remaining = std::min<std::uintmax_t>(checksumQuantum, progress.size - progress.offset);
+    if (remaining > 0) {
+        const auto chunk = std::min<std::uintmax_t>(remaining, BufferPool::maxBuffer);
+        const auto deadline = BufferPool::Clock::now() + std::chrono::minutes(2);
+        auto buffer = pool.acquire(chunk, deadline);
+        while (remaining > 0) {
+            if (BufferPool::Clock::now() >= deadline)
+                return fail("Round Robin checksum slice timed out.");
+            const auto count = ::pread(descriptor, buffer.data(),
+                                       std::min<std::uintmax_t>(remaining, buffer.size()), progress.offset);
+            if (count < 0 && errno == EINTR)
+                continue;
+            if (count <= 0)
+                return fail("Could not read the Round Robin checksum slice.");
+            for (ssize_t i = 0; i < count; ++i)
+                progress.crc = updateCrc(progress.crc, static_cast<unsigned char>(buffer.data()[i]));
+            progress.offset += count;
+            remaining -= count;
+        }
+    }
+    if (::fstat(descriptor, &info) != 0 || !sameFile())
+        return fail("File changed during Round Robin processing.");
+    if (progress.offset < progress.size)
+        return std::nullopt;
+    auto crc = progress.crc;
+    for (auto length = progress.size; length > 0; length >>= 8)
+        crc = updateCrc(crc, static_cast<unsigned char>(length));
+    ChecksumResult result;
+    result.checksum = ~crc;
+    result.bytes = progress.size;
+    result.exitCode = 0;
+    return result;
 }
 
 std::vector<FileInfo> Checksum::files() const {
@@ -241,6 +338,7 @@ ChecksumResult Checksum::runInput(int descriptor, std::chrono::milliseconds time
             }
         }
         if (feed.get() >= 0 && sent < pending) {
+            // Wake on socket readiness so filesystem throughput isn't capped by the wait interval.
             pollfd inputWritable{feed.get(), POLLOUT, 0};
             if (::poll(&inputWritable, 1, 5) < 0 && errno != EINTR)
                 result.error = "Could not wait for checksum input to become writable.";

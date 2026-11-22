@@ -223,3 +223,9 @@ The independent audit preserved the original 34 tests and all eleven scenarios. 
 ## Original implementation and licenses
 
 BuildQueue is original C++17 code, licensed under MIT. The educational reference, [Operating-System-TimeSharing](https://github.com/KevinFu12/Operating-System-TimeSharing), was absent locally and was neither copied nor modified. [PROJECT_COMPARISON](docs/PROJECT_COMPARISON.md) distinguishes the supplied reference description from BuildQueue's observed implementation. [cpp-httplib](https://github.com/yhirose/cpp-httplib/tree/v0.18.3) and [nlohmann/json](https://github.com/nlohmann/json/tree/v3.11.3) retain their upstream MIT notices in `third_party/LICENSES/`.
+
+### Round Robin and the desktop dashboard
+
+Round Robin reads up to 1 MiB per turn and returns unfinished checksum jobs to the ready queue. Its work runs inside the application with a bounded read buffer. The process memory limit and child PID/RSS apply to the policies that spawn `cksum`.
+
+The Jobs table shows arrival, burst, completion, turnaround, and waiting times. Finished jobs are listed by completion time. Open Analysis to compare all four policies and inspect the checksum buffer pool.

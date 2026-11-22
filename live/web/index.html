@@ -27,11 +27,11 @@
         <div class="heading"><h2 id="queue-heading">Job activity</h2><button type="button" id="clear">Clear finished</button></div>
         <div class="summary">
           <span id="slots">Waiting for server</span>
-          <label>Scheduling <select id="policy" title="Shortest job first uses file size as its estimate"><option value="fcfs">First come, first served</option><option value="priority">Priority</option><option value="sjf">Shortest job first</option></select></label>
+          <label>Scheduling <select id="policy" title="SJF uses file size; Round Robin reads 1 MiB per turn"><option value="fcfs">First come, first served</option><option value="priority">Priority</option><option value="sjf">Shortest job first</option><option value="rr">Round Robin</option></select></label>
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th scope="col">File</th><th scope="col">State</th><th scope="col">Checksum</th><th scope="col">PID</th><th scope="col">Peak RSS</th><th scope="col">Wait</th><th scope="col">Run</th><th scope="col">Action</th></tr></thead>
+            <thead><tr><th scope="col">File</th><th scope="col">State</th><th scope="col">Checksum</th><th scope="col">PID</th><th scope="col">Peak RSS</th><th scope="col">Arrival</th><th scope="col">Burst</th><th scope="col">Completion</th><th scope="col">Turnaround</th><th scope="col">Waiting</th><th scope="col">Action</th></tr></thead>
             <tbody id="jobs"></tbody>
           </table>
         </div>

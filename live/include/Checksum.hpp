@@ -11,6 +11,7 @@
 namespace bq {
 inline constexpr std::uint64_t defaultMemoryMiB = 64;
 inline constexpr std::uint64_t bytesPerMiB = 1024 * 1024;
+inline constexpr std::size_t checksumQuantum = bytesPerMiB;
 
 struct FileInfo {
     std::string name;
@@ -27,12 +28,20 @@ struct ChecksumResult {
     std::string error;
 };
 
+struct ChecksumProgress {
+    std::uintmax_t offset = 0, size = 0, device = 0, inode = 0;
+    std::int64_t modifiedSeconds = 0, modifiedNanoseconds = 0;
+    std::uint32_t crc = 0;
+    bool initialized = false;
+};
+
 class Checksum {
     std::filesystem::path root_;
     int directory_;
     mutable BufferPool pool_;
     static ChecksumResult runInput(int descriptor, std::chrono::milliseconds timeout,
                                    std::uint64_t addressSpaceBytes, BufferPool& pool);
+    static std::optional<ChecksumResult> sliceInput(int descriptor, ChecksumProgress&, BufferPool&);
 
 public:
     explicit Checksum(const std::filesystem::path& folder);
@@ -44,6 +53,9 @@ public:
     std::optional<std::uintmax_t> size(const std::string& name) const;
     static std::optional<std::uintmax_t> pathSize(const std::filesystem::path& path);
     static bool validName(const std::string& name);
+    std::optional<ChecksumResult> slice(const std::string&, ChecksumProgress&) const;
+    static std::optional<ChecksumResult> slicePath(const std::filesystem::path&, ChecksumProgress&,
+                                                   BufferPool&);
     ChecksumResult run(const std::string& name,
                        std::chrono::milliseconds timeout = std::chrono::minutes(2),
                        std::uint64_t addressSpaceBytes = defaultMemoryMiB * bytesPerMiB) const;

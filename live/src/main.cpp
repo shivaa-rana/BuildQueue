@@ -36,7 +36,9 @@ Policy readPolicy(const std::string& value) {
         return Policy::Priority;
     if (value == "sjf")
         return Policy::Sjf;
-    throw std::invalid_argument("Choose fcfs, priority, or sjf scheduling.");
+    if (value == "rr")
+        return Policy::RoundRobin;
+    throw std::invalid_argument("Choose fcfs, priority, sjf, or rr scheduling.");
 }
 
 const char* policyName(Policy policy) {
@@ -44,6 +46,7 @@ const char* policyName(Policy policy) {
         case Policy::Fcfs: return "fcfs";
         case Policy::Priority: return "priority";
         case Policy::Sjf: return "sjf";
+        case Policy::RoundRobin: return "rr";
     }
     return "fcfs";
 }
@@ -70,13 +73,22 @@ json describe(const Snapshot& snapshot) {
     for (const auto& job : snapshot.jobs) {
         bool started = job.started != Job::Clock::time_point{};
         bool finished = job.finished != Job::Clock::time_point{};
-        auto waitEnd = started ? job.started : (finished ? job.finished : now);
+        auto slices = json::array();
+        for (const auto& [start, end] : job.slices)
+            slices.push_back({milliseconds(start - origin), milliseconds(end - origin)});
+        if (job.state == State::Running && slices.size() < 256)
+            slices.push_back({milliseconds(job.sliceStarted - origin), milliseconds(now - origin)});
         jobs.push_back({
             {"id", job.id}, {"file", job.file}, {"state", stateName(job.state)},
             {"submitted_ms", milliseconds(job.submitted - origin)},
-            {"priority", job.priority}, {"wait_ms", milliseconds(waitEnd - job.submitted)},
+            {"priority", job.priority}, {"wait_ms", milliseconds(job.waitTime(now))},
             {"estimated_bytes", job.estimatedBytes ? json(*job.estimatedBytes) : json(nullptr)},
-            {"run_ms", started ? json(milliseconds((finished ? job.finished : now) - job.started)) : json(nullptr)},
+            {"run_ms", started ? json(milliseconds(job.burstTime(now))) : json(nullptr)},
+            {"completion_ms", finished && job.state != State::Cancelled ? json(milliseconds(job.finished - origin)) : json(nullptr)},
+            {"turnaround_ms", finished && job.state != State::Cancelled ? json(milliseconds(job.finished - job.submitted)) : json(nullptr)},
+            {"elapsed_ms", milliseconds((finished ? job.finished : now) - origin)},
+            {"slices", std::move(slices)},
+            {"timeline_truncated", job.timelineTruncated || (job.state == State::Running && job.slices.size() == 256)},
             {"pid", job.result.pid < 0 ? json(nullptr) : json(job.result.pid)},
             {"exit_code", job.result.exitCode < 0 ? json(nullptr) : json(job.result.exitCode)},
             {"checksum", job.state == State::Completed ? json(job.result.checksum) : json(nullptr)},
@@ -219,7 +231,7 @@ void help() {
                  "  ./buildqueue --input DIR --serve [--port 8081] [--web web]\n"
                  "  ./buildqueue --input DIR --file NAME [--file NAME ...]\n"
                  "  Both modes accept --workers 1..16, --slots 1..workers,\n"
-                 "  and --policy fcfs|priority|sjf (default: fcfs).\n"
+                 "  and --policy fcfs|priority|sjf|rr (default: fcfs).\n"
                  "  SJF uses file size. CLI batches also accept --priority 0..9.\n"
                  "  --memory-mib 8..4096 caps each checksum process (default: 64).\n";
 }
@@ -266,7 +278,8 @@ int main(int argc, char* argv[]) {
                          [&](const auto& name) {
                              return checksum.run(name, std::chrono::minutes(2), memoryMiB * bytesPerMiB);
                          }, Input::FolderNames,
-                         [&](const auto& name) { return checksum.size(name); });
+                         [&](const auto& name) { return checksum.size(name); },
+                         [&](const auto& name, ChecksumProgress& progress) { return checksum.slice(name, progress); });
         queue.setPolicy(policy);
         if (dashboard)
             return serve(queue, checksum, web, port);
