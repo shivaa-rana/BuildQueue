@@ -1,14 +1,17 @@
 Deadlock demonstration
 
-Open BuildQueue and select Deadlock. Choose one of the five resource
-pairs and click Run recovery demo. Each pair uses two files from its
-own folder under demo-files/deadlock. No file copying is necessary.
+Open BuildQueue and select Deadlock. Click Upload lock jobs.
+Open one of the five numbered folders under demo-files/deadlock,
+select both .txt files, then click Open. Run bundled pair is a shortcut
+that uses the same files and the same checksum worker path.
 
 Two threads take the resource locks in opposite orders. In the graph,
 arrows point from the requester to the owner. The dashed red arrow is
 the rejected cycle-closing request. The snapshot stays visible after
 the rejected worker releases its lock and its work is retried.
-Expected result: one detected cycle and two completed workers.
+Expected result: one detected cycle, two completed jobs, and a CRC
+checksum and byte count for the full contents of each selected file.
+Each file declares its lock order in the first three lines.
 
 Timeline demonstration
 

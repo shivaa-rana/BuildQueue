@@ -246,11 +246,13 @@ class Desktop : public QWidget {
     QStackedWidget* jobResults_ = new QStackedWidget(this);
     QLabel* solver_ = new QLabel(this);
     LiveTimeline* graph_ = new LiveTimeline(this);
-    QPushButton* runRecovery_ = new QPushButton("Run recovery demo", this);
+    QPushButton* runRecovery_ = new QPushButton("Run bundled pair", this);
+    QPushButton* uploadLockJobs_ = new QPushButton("Upload lock jobs", this);
     QComboBox* demoCase_ = new QComboBox(this);
     WaitForGraph* waitGraph_ = new WaitForGraph(this);
-    QLabel* recoveryResult_ = new QLabel("Choose a resource pair and run the demo.", this);
+    QLabel* recoveryResult_ = new QLabel("Upload both files from one pair to run two live checksum jobs.", this);
     std::future<RecoveryDemoResult> recovery_;
+    std::array<QString, 2> lockJobNames_;
     int timelinePage_ = -1;
     QLabel* timelineScale_ = new QLabel(this);
     QLabel* policyHelp_ = new QLabel(this);
@@ -591,15 +593,16 @@ public:
         scroll->setWidget(graph_);
         timelineRows->addWidget(scroll, 1);
 
-        auto* demoHint = new QLabel("Two workers request the bundled demo files in opposite order. "
-                                    "After cycle detection, the rejected worker releases its lock and its work is retried.", this);
+        auto* demoHint = new QLabel("Upload two lock-job files with opposite lock orders. BuildQueue detects the cycle, "
+                                    "retries one job, and shows a checksum for each uploaded file.", this);
         demoHint->setWordWrap(true);
         deadlockRows->addWidget(demoHint);
         auto* demoControls = new QHBoxLayout;
         demoCase_->setAccessibleName("Demo resource pair");
         for (const auto& scenario : recoveryCases)
             demoCase_->addItem(QString::fromUtf8(scenario.title), QString::fromUtf8(scenario.directory));
-        demoControls->addWidget(new QLabel("Demo resources", this));
+        demoControls->addWidget(uploadLockJobs_);
+        demoControls->addWidget(new QLabel("Or select a bundled pair", this));
         demoControls->addWidget(demoCase_);
         demoControls->addWidget(runRecovery_);
         demoControls->addStretch();
@@ -613,6 +616,14 @@ public:
         compareRows->addWidget(solver_);
         deadlockRows->addStretch();
         connect(runRecovery_, &QPushButton::clicked, this, [this] { startRecoveryDemo(); });
+        connect(uploadLockJobs_, &QPushButton::clicked, this, [this] {
+            const auto files = QFileDialog::getOpenFileNames(this, "Choose both lock-job files",
+                demoDirectory().absolutePath(), "Lock-job files (*.txt);;All files (*)");
+            if (files.size() == 2)
+                startLockedJobs(files[0], files[1]);
+            else if (!files.isEmpty())
+                recoveryResult_->setText("Select exactly two files from the same pair.");
+        });
         body->addWidget(status_);
 
         connect(add, &QPushButton::clicked, this, [this] { chooseFiles(); });
@@ -1016,21 +1027,32 @@ private:
         solver_->setText(solverText);
     }
 
-    void startRecoveryDemo() {
-        if (recovery_.valid())
-            return;
-        const auto relative = "demo-files/deadlock/" + demoCase_->currentData().toString();
+    QDir demoDirectory() const {
+        const QString relative = "demo-files/deadlock";
         QDir demo(QDir::current().filePath(relative));
         if (!demo.exists())
             demo = QDir(QDir(QCoreApplication::applicationDirPath()).filePath(relative));
-        const auto a = QFile::encodeName(demo.absoluteFilePath("resource-a.txt")).toStdString();
-        const auto b = QFile::encodeName(demo.absoluteFilePath("resource-b.txt")).toStdString();
+        return demo;
+    }
+
+    void startRecoveryDemo() {
+        const QDir pair(demoDirectory().absoluteFilePath(demoCase_->currentData().toString()));
+        startLockedJobs(pair.absoluteFilePath("resource-a.txt"), pair.absoluteFilePath("resource-b.txt"));
+    }
+
+    void startLockedJobs(const QString& first, const QString& second) {
+        if (recovery_.valid())
+            return;
+        const auto a = QFile::encodeName(first).toStdString();
+        const auto b = QFile::encodeName(second).toStdString();
         try {
-            recovery_ = std::async(std::launch::async, [a, b] { return runRecoveryDemo(a, b); });
+            lockJobNames_ = {QFileInfo(first).fileName(), QFileInfo(second).fileName()};
+            recovery_ = std::async(std::launch::async, [a, b] { return runLockedChecksumPair(a, b); });
             runRecovery_->setEnabled(false);
+            uploadLockJobs_->setEnabled(false);
             demoCase_->setEnabled(false);
             waitGraph_->setCycle(std::nullopt);
-            recoveryResult_->setText("Running " + demoCase_->currentText() + "...");
+            recoveryResult_->setText("Processing " + lockJobNames_[0] + " and " + lockJobNames_[1] + "...");
         } catch (const std::exception& error) {
             recoveryResult_->setText(QString::fromUtf8(error.what()));
         }
@@ -1041,20 +1063,25 @@ private:
             recovery_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
             return;
         runRecovery_->setEnabled(true);
+        uploadLockJobs_->setEnabled(true);
         demoCase_->setEnabled(true);
         try {
             const auto result = recovery_.get();
-            recoveryResult_->setText(
-                QString("%1: Recovered. %2 of 2 workers finished.\n"
-                        "%3 cycle detected. Worker %4 released its lock and its work was retried. "
-                        "The graph preserves the cycle for inspection.")
-                    .arg(demoCase_->currentText())
+            auto summary = QString("Recovered. %1 of 2 jobs finished.\n"
+                        "%2 cycle detected. Job %3 was retried after its lock was released.")
                     .arg(result.completed)
                     .arg(static_cast<qulonglong>(result.detection.count))
-                    .arg(result.victim));
+                    .arg(result.victim);
+            for (std::size_t i = 0; i < result.checksums.size(); ++i)
+                summary += QString("\nJob %1: %2 | CRC %3 | %4 bytes")
+                    .arg(static_cast<int>(i + 1))
+                    .arg(lockJobNames_[i])
+                    .arg(result.checksums[i].checksum)
+                    .arg(static_cast<qulonglong>(result.checksums[i].bytes));
+            recoveryResult_->setText(summary);
             waitGraph_->setCycle(result);
         } catch (const std::exception& error) {
-            recoveryResult_->setText(QString("Demo failed: %1").arg(QString::fromUtf8(error.what())));
+            recoveryResult_->setText(QString("Could not run the lock jobs: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 };

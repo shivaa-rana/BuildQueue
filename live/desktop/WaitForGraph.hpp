@@ -31,14 +31,15 @@ protected:
         p.fillRect(rect(), QColor("#fffdf9"));
         p.setPen(QColor("#322a23"));
         if (!result_) {
-            p.drawText(rect(), Qt::AlignCenter, "Run a demo to capture the wait-for graph.");
+            p.drawText(rect(), Qt::AlignCenter, "Upload a lock-job pair to capture the wait-for graph.");
             return;
         }
 
         const qreal mid = height() / 2.0;
         const qreal nodeWidth = qBound<qreal>(88, width() * .19, 152);
-        const QRectF first(18, mid - 24, nodeWidth, 48);
-        const QRectF second(width() - 18 - nodeWidth, mid - 24, nodeWidth, 48);
+        const qreal margin = qMax<qreal>(18, (width() - 820.0) / 2);
+        const QRectF first(margin, mid - 24, nodeWidth, 48);
+        const QRectF second(width() - margin - nodeWidth, mid - 24, nodeWidth, 48);
         const qreal left = first.right(), right = second.left();
 
         QFont strong = font();

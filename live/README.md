@@ -104,6 +104,6 @@ The Jobs table shows arrival, burst, completion, turnaround, and waiting times. 
 
 ### Deadlock recovery demonstration
 
-In the Qt desktop app, open **Deadlock**, choose a resource pair and click **Run recovery demo**. There are five pairs (ten files) in `demo-files/deadlock`. The graph keeps the detected cycle visible after recovery. Each arrow points from a waiting worker to the resource owner. A dashed red arrow marks the rejected request. The expected result is one detected cycle and two completed workers after retry. The **Timeline** tab shows queued and running intervals on a shared elapsed-time axis.
+In the Qt desktop app, open **Deadlock** and click **Upload lock jobs**. Select both files from one numbered folder and click **Open**. Each file declares its two locks in opposite order. The app checksums the full contents of both submitted files under the locks and shows their CRCs and byte counts after retry. **Run bundled pair** is a shortcut for the same worker path. There are five pairs (ten files) in `demo-files/deadlock`. The graph keeps the detected cycle visible after recovery. Each arrow points from a waiting worker to the resource owner. A dashed red arrow marks the rejected request. The expected result is one detected cycle and two completed workers after retry. The **Timeline** tab shows queued and running intervals on a shared elapsed-time axis.
 
 On Windows, extract the repository ZIP and double-click **Start BuildQueue.cmd**. It uses Ubuntu under WSL 2 with WSLg and the usual Qt build dependencies.

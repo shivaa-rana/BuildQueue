@@ -1,2 +1,5 @@
-Printer
-Worker 1 holds this resource and asks for Scanner.
+BuildQueue lock job v1
+Lock first: Printer
+Lock second: Scanner
+
+Checksum workload for Printer and Scanner.

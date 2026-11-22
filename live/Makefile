@@ -16,12 +16,12 @@ buildqueue: src/main.cpp $(CORE) $(HEADERS) third_party/httplib.h third_party/js
 	mkdir -p .build
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp,$^) $(LDFLAGS) $(LDLIBS) -o $@
 
-.build/deadlock_test: tests/test_deadlock.cpp src/DeadlockDetector.cpp src/DeadlockDemo.cpp $(HEADERS)
+.build/deadlock_test: tests/test_deadlock.cpp src/Checksum.cpp src/DeadlockDetector.cpp src/DeadlockDemo.cpp $(HEADERS)
 	mkdir -p .build
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp,$^) $(LDFLAGS) $(LDLIBS) -o $@
 
 test-deadlock: .build/deadlock_test
-	timeout 10s ./.build/deadlock_test demo-files/deadlock
+	timeout 30s ./.build/deadlock_test demo-files/deadlock
 
 test: buildqueue .build/live_tests test-deadlock
 	./.build/live_tests

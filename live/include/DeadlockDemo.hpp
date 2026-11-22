@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DeadlockDetector.hpp"
+#include "Checksum.hpp"
 
 #include <array>
 #include <filesystem>
@@ -25,8 +26,9 @@ struct RecoveryDemoResult {
     int completed = 0;
     bool recovered = false;
     std::array<std::thread::id, 2> workers;
+    std::array<ChecksumResult, 2> checksums;
 };
 
-RecoveryDemoResult runRecoveryDemo(const std::filesystem::path& firstFile,
-                                   const std::filesystem::path& secondFile);
+RecoveryDemoResult runLockedChecksumPair(const std::filesystem::path& firstFile,
+                                         const std::filesystem::path& secondFile);
 }
