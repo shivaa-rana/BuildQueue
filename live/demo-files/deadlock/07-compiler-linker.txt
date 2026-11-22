@@ -1,0 +1,7 @@
+BuildQueue deadlock case v1
+Lock first: Compiler
+Lock second: Linker
+Lock first: Linker
+Lock second: Compiler
+
+Checksum workload for Compiler and Linker.

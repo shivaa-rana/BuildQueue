@@ -1,0 +1,7 @@
+BuildQueue deadlock case v1
+Lock first: Catalog
+Lock second: Metadata
+Lock first: Metadata
+Lock second: Catalog
+
+Checksum workload for Catalog and Metadata.

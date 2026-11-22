@@ -246,13 +246,13 @@ class Desktop : public QWidget {
     QStackedWidget* jobResults_ = new QStackedWidget(this);
     QLabel* solver_ = new QLabel(this);
     LiveTimeline* graph_ = new LiveTimeline(this);
-    QPushButton* runRecovery_ = new QPushButton("Run bundled pair", this);
-    QPushButton* uploadLockJobs_ = new QPushButton("Upload lock jobs", this);
+    QPushButton* runRecovery_ = new QPushButton("Run bundled case", this);
+    QPushButton* uploadLockJobs_ = new QPushButton("Upload deadlock file", this);
     QComboBox* demoCase_ = new QComboBox(this);
     WaitForGraph* waitGraph_ = new WaitForGraph(this);
-    QLabel* recoveryResult_ = new QLabel("Upload both files from one pair to run two live checksum jobs.", this);
+    QLabel* recoveryResult_ = new QLabel("Upload one deadlock file to run its two live checksum jobs.", this);
     std::future<RecoveryDemoResult> recovery_;
-    std::array<QString, 2> lockJobNames_;
+    QString lockJobName_;
     int timelinePage_ = -1;
     QLabel* timelineScale_ = new QLabel(this);
     QLabel* policyHelp_ = new QLabel(this);
@@ -593,16 +593,16 @@ public:
         scroll->setWidget(graph_);
         timelineRows->addWidget(scroll, 1);
 
-        auto* demoHint = new QLabel("Upload two lock-job files with opposite lock orders. BuildQueue detects the cycle, "
-                                    "retries one job, and shows a checksum for each uploaded file.", this);
+        auto* demoHint = new QLabel("One deadlock file defines two jobs with opposite lock orders. "
+                                    "BuildQueue detects the cycle, retries one job, and shows both checksum results.", this);
         demoHint->setWordWrap(true);
         deadlockRows->addWidget(demoHint);
         auto* demoControls = new QHBoxLayout;
-        demoCase_->setAccessibleName("Demo resource pair");
+        demoCase_->setAccessibleName("Bundled deadlock case");
         for (const auto& scenario : recoveryCases)
-            demoCase_->addItem(QString::fromUtf8(scenario.title), QString::fromUtf8(scenario.directory));
+            demoCase_->addItem(QString::fromUtf8(scenario.title), QString::fromUtf8(scenario.filename));
         demoControls->addWidget(uploadLockJobs_);
-        demoControls->addWidget(new QLabel("Or select a bundled pair", this));
+        demoControls->addWidget(new QLabel("Or select a bundled case", this));
         demoControls->addWidget(demoCase_);
         demoControls->addWidget(runRecovery_);
         demoControls->addStretch();
@@ -617,12 +617,10 @@ public:
         deadlockRows->addStretch();
         connect(runRecovery_, &QPushButton::clicked, this, [this] { startRecoveryDemo(); });
         connect(uploadLockJobs_, &QPushButton::clicked, this, [this] {
-            const auto files = QFileDialog::getOpenFileNames(this, "Choose both lock-job files",
-                demoDirectory().absolutePath(), "Lock-job files (*.txt);;All files (*)");
-            if (files.size() == 2)
-                startLockedJobs(files[0], files[1]);
-            else if (!files.isEmpty())
-                recoveryResult_->setText("Select exactly two files from the same pair.");
+            const auto file = QFileDialog::getOpenFileName(this, "Choose one deadlock file",
+                demoDirectory().absolutePath(), "Deadlock files (*.txt);;All files (*)");
+            if (!file.isEmpty())
+                startLockedJobs(file);
         });
         body->addWidget(status_);
 
@@ -1036,23 +1034,21 @@ private:
     }
 
     void startRecoveryDemo() {
-        const QDir pair(demoDirectory().absoluteFilePath(demoCase_->currentData().toString()));
-        startLockedJobs(pair.absoluteFilePath("resource-a.txt"), pair.absoluteFilePath("resource-b.txt"));
+        startLockedJobs(demoDirectory().absoluteFilePath(demoCase_->currentData().toString()));
     }
 
-    void startLockedJobs(const QString& first, const QString& second) {
+    void startLockedJobs(const QString& file) {
         if (recovery_.valid())
             return;
-        const auto a = QFile::encodeName(first).toStdString();
-        const auto b = QFile::encodeName(second).toStdString();
+        const auto path = QFile::encodeName(file).toStdString();
         try {
-            lockJobNames_ = {QFileInfo(first).fileName(), QFileInfo(second).fileName()};
-            recovery_ = std::async(std::launch::async, [a, b] { return runLockedChecksumPair(a, b); });
+            lockJobName_ = QFileInfo(file).fileName();
+            recovery_ = std::async(std::launch::async, [path] { return runLockedChecksumFile(path); });
             runRecovery_->setEnabled(false);
             uploadLockJobs_->setEnabled(false);
             demoCase_->setEnabled(false);
             waitGraph_->setCycle(std::nullopt);
-            recoveryResult_->setText("Processing " + lockJobNames_[0] + " and " + lockJobNames_[1] + "...");
+            recoveryResult_->setText("Processing " + lockJobName_ + " with two jobs...");
         } catch (const std::exception& error) {
             recoveryResult_->setText(QString::fromUtf8(error.what()));
         }
@@ -1067,15 +1063,15 @@ private:
         demoCase_->setEnabled(true);
         try {
             const auto result = recovery_.get();
-            auto summary = QString("Recovered. %1 of 2 jobs finished.\n"
-                        "%2 cycle detected. Job %3 was retried after its lock was released.")
+            auto summary = QString("%1: Recovered. %2 of 2 jobs finished.\n"
+                        "%3 cycle detected. Job %4 was retried after its lock was released.")
+                    .arg(lockJobName_)
                     .arg(result.completed)
                     .arg(static_cast<qulonglong>(result.detection.count))
                     .arg(result.victim);
             for (std::size_t i = 0; i < result.checksums.size(); ++i)
-                summary += QString("\nJob %1: %2 | CRC %3 | %4 bytes")
+                summary += QString("\nJob %1: CRC %2 | %3 bytes")
                     .arg(static_cast<int>(i + 1))
-                    .arg(lockJobNames_[i])
                     .arg(result.checksums[i].checksum)
                     .arg(static_cast<qulonglong>(result.checksums[i].bytes));
             recoveryResult_->setText(summary);

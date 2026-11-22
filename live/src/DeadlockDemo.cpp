@@ -18,12 +18,7 @@ std::string readHeaderLine(std::ifstream& input, const std::filesystem::path& pa
     return line;
 }
 
-std::array<std::string, 2> readLockOrder(const std::filesystem::path& path) {
-    if (!Checksum::pathSize(path))
-        throw std::invalid_argument("Choose a readable regular file: " + path.filename().string());
-    std::ifstream input(path);
-    if (readHeaderLine(input, path) != "BuildQueue lock job v1")
-        throw std::invalid_argument("Choose a BuildQueue lock-job file from demo-files/deadlock: " + path.filename().string());
+std::array<std::string, 2> readLockOrder(std::ifstream& input, const std::filesystem::path& path) {
     const std::array<std::string, 2> prefixes{"Lock first: ", "Lock second: "};
     std::array<std::string, 2> order;
     for (std::size_t i = 0; i < order.size(); ++i) {
@@ -46,15 +41,18 @@ ChecksumResult checksumJob(const std::filesystem::path& path) {
 }
 }
 
-RecoveryDemoResult runLockedChecksumPair(const std::filesystem::path& firstFile,
-                                         const std::filesystem::path& secondFile) {
-    const std::array<std::filesystem::path, 2> paths{
-        std::filesystem::absolute(firstFile), std::filesystem::absolute(secondFile)};
-    const auto firstOrder = readLockOrder(paths[0]);
-    const auto secondOrder = readLockOrder(paths[1]);
+RecoveryDemoResult runLockedChecksumFile(const std::filesystem::path& file) {
+    const auto path = std::filesystem::absolute(file);
+    if (!Checksum::pathSize(path))
+        throw std::invalid_argument("Choose a readable regular file: " + path.filename().string());
+    std::ifstream input(path);
+    if (readHeaderLine(input, path) != "BuildQueue deadlock case v1")
+        throw std::invalid_argument("Choose one BuildQueue deadlock case from demo-files/deadlock.");
+    const auto firstOrder = readLockOrder(input, path);
+    const auto secondOrder = readLockOrder(input, path);
     if (firstOrder[0] == firstOrder[1] ||
         firstOrder[0] != secondOrder[1] || firstOrder[1] != secondOrder[0])
-        throw std::invalid_argument("Choose the two files from one pair. They must request the same locks in opposite orders.");
+        throw std::invalid_argument("The two jobs in the file must request distinct locks in opposite orders.");
     DeadlockDetector detector;
     TrackedMutex first(detector, firstOrder[0]);
     TrackedMutex second(detector, firstOrder[1]);
@@ -81,7 +79,7 @@ RecoveryDemoResult runLockedChecksumPair(const std::filesystem::path& firstFile,
                     return;
             }
             std::lock_guard<TrackedMutex> acquire(requested);
-            checksums[worker - 1] = checksumJob(paths[worker - 1]);
+            checksums[worker - 1] = checksumJob(path);
             ++completed;
         } catch (const DeadlockDetected&) {
             victim = worker;
@@ -118,7 +116,7 @@ RecoveryDemoResult runLockedChecksumPair(const std::filesystem::path& firstFile,
     {
         std::lock_guard<TrackedMutex> holdFirst(first);
         std::lock_guard<TrackedMutex> holdSecond(second);
-        checksums[victim - 1] = checksumJob(paths[victim - 1]);
+        checksums[victim - 1] = checksumJob(path);
         ++completed;
     }
     return {detector.report(), victim, completed, true, workers, std::move(checksums)};

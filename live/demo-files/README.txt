@@ -1,17 +1,9 @@
 Deadlock demonstration
 
-Open BuildQueue and select Deadlock. Click Upload lock jobs.
-Open one of the five numbered folders under demo-files/deadlock,
-select both .txt files, then click Open. Run bundled pair is a shortcut
-that uses the same files and the same checksum worker path.
-
-Two threads take the resource locks in opposite orders. In the graph,
-arrows point from the requester to the owner. The dashed red arrow is
-the rejected cycle-closing request. The snapshot stays visible after
-the rejected worker releases its lock and its work is retried.
-Expected result: one detected cycle, two completed jobs, and a CRC
-checksum and byte count for the full contents of each selected file.
-Each file declares its lock order in the first three lines.
+Open BuildQueue and select Deadlock. Click Upload deadlock file.
+Select any one of the ten .txt files directly inside demo-files/deadlock.
+Each file declares two jobs with opposite lock orders. Both jobs process
+the selected file. Expected result: one detected cycle and two completed jobs.
 
 Timeline demonstration
 

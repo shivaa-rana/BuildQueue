@@ -1,0 +1,7 @@
+BuildQueue deadlock case v1
+Lock first: Reader buffer
+Lock second: Writer buffer
+Lock first: Writer buffer
+Lock second: Reader buffer
+
+Checksum workload for Reader buffer and Writer buffer.

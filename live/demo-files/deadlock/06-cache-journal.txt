@@ -1,0 +1,7 @@
+BuildQueue deadlock case v1
+Lock first: Cache
+Lock second: Journal
+Lock first: Journal
+Lock second: Cache
+
+Checksum workload for Cache and Journal.

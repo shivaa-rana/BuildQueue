@@ -4,8 +4,8 @@ Start on Windows
 - Extract the ZIP to a local folder and open Start BuildQueue.cmd.
 - Requires the Ubuntu WSL 2 distribution with Linux graphical app support
   and the build packages below. The first launch builds the Qt application.
-- Keep demo-files next to Start BuildQueue.cmd. Open Deadlock and select
-  Upload lock jobs to select both files from any numbered pair.
+- Open Deadlock, click Upload deadlock file and select any one .txt file
+  directly inside demo-files/deadlock.
 - Open Timeline for the live graph in first-dispatch order.
 
 Requirements

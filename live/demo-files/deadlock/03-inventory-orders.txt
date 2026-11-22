@@ -1,5 +1,7 @@
-BuildQueue lock job v1
+BuildQueue deadlock case v1
 Lock first: Inventory record
 Lock second: Order record
+Lock first: Order record
+Lock second: Inventory record
 
 Checksum workload for Inventory record and Order record.
