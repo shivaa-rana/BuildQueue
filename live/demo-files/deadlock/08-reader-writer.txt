@@ -1,7 +1,10 @@
-BuildQueue deadlock case v1
+BuildQueue deadlock case v2
+Jobs: 3
 Lock first: Reader buffer
 Lock second: Writer buffer
 Lock first: Writer buffer
+Lock second: File index
+Lock first: File index
 Lock second: Reader buffer
 
-Checksum workload for Reader buffer and Writer buffer.
+Checksum workload for a multi-job resource cycle.

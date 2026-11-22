@@ -22,6 +22,14 @@ BatchQueue::BatchQueue(int workers, int slots, Work work, Input input, Estimate 
 
 BatchQueue::~BatchQueue() { stop(); }
 
+void BatchQueue::pauseDispatch(bool paused) {
+    {
+        std::lock_guard<TrackedMutex> lock(mutex_);
+        paused_ = paused;
+    }
+    changed_.notify_all();
+}
+
 void BatchQueue::stop() {
     {
         std::lock_guard<TrackedMutex> lock(mutex_);
@@ -160,7 +168,7 @@ void BatchQueue::worker() {
         {
             std::unique_lock<TrackedMutex> lock(mutex_);
             changed_.wait(lock, [this] {
-                return stopping_ || (queued_ > 0 && permits_.tryAcquire());
+                return stopping_ || (!paused_ && queued_ > 0 && permits_.tryAcquire());
             });
             if (stopping_)
                 return;
@@ -202,7 +210,7 @@ void BatchQueue::worker() {
                 job->slices.emplace_back(job->sliceStarted, now);
             else
                 job->timelineTruncated = true;
-            if (result) {
+            if (result && !(paused_ && result->exitCode == 125)) {
                 job->state = result->error.empty() && result->exitCode == 0 ? State::Completed : State::Failed;
                 job->result = std::move(*result);
                 job->finished = now;
