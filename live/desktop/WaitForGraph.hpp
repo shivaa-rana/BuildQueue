@@ -7,6 +7,8 @@
 #include <QWidget>
 
 #include <optional>
+#include <cmath>
+#include <algorithm>
 #include <utility>
 
 class WaitForGraph : public QWidget {
@@ -35,52 +37,55 @@ protected:
             return;
         }
 
-        const qreal mid = height() / 2.0;
-        const qreal nodeWidth = qBound<qreal>(88, width() * .19, 152);
-        const qreal margin = qMax<qreal>(18, (width() - 820.0) / 2);
-        const QRectF first(margin, mid - 24, nodeWidth, 48);
-        const QRectF second(width() - margin - nodeWidth, mid - 24, nodeWidth, 48);
-        const qreal left = first.right(), right = second.left();
-
-        QFont strong = font();
-        strong.setBold(true);
-        p.setFont(strong);
-        p.drawText(QRectF(12, 8, width() - 24, 30), Qt::AlignCenter, "Detected cycle snapshot");
-        for (const auto& edge : result_->detection.cycleEdges) {
-            const bool forward = edge.waiter == result_->workers[0];
-            const qreal y = mid + (forward ? -14 : 14);
-            const qreal from = forward ? left : right;
-            const qreal to = forward ? right : left;
-            const qreal tail = to + (forward ? -10 : 10);
-            const QColor color(edge.rejected ? "#aa382a" : "#4c5d43");
-            QPen pen(color, 3);
-            if (edge.rejected)
-                pen.setStyle(Qt::DashLine);
+        const auto& edges = result_->detection.cycleEdges;
+        if (edges.empty())
+            return;
+        const qreal centerX = width() / 2.0, centerY = height() / 2.0;
+        const qreal radiusX = qMin<qreal>(width() / 2.0 - 58.0, 300.0);
+        const qreal radiusY = qMin<qreal>(height() / 2.0 - 60.0, 170.0);
+        const qreal nodeRadius = 26;
+        std::vector<QPointF> nodes;
+        for (std::size_t i = 0; i < edges.size(); ++i) {
+            const auto angle = 6.283185307 * i / edges.size();
+            nodes.emplace_back(centerX + radiusX * std::cos(angle), centerY + radiusY * std::sin(angle));
+        }
+        p.drawText(QRectF(12, 8, width() - 24, 30), Qt::AlignCenter,
+                   result_->checksums.empty() ? "Active wait-for cycle" : "Captured wait-for cycle");
+        for (std::size_t i = 0; i < edges.size(); ++i) {
+            const auto& edge = edges[i];
+            const QPointF delta = nodes[(i + 1) % nodes.size()] - nodes[i];
+            const QPointF direction = delta / std::hypot(delta.x(), delta.y());
+            const QPointF normal(-direction.y(), direction.x());
+            const QPointF offset = nodes.size() == 2 ? normal * 12 : QPointF();
+            const QPointF from = nodes[i] + direction * (nodeRadius - 4) + offset;
+            const QPointF to = nodes[(i + 1) % nodes.size()] - direction * (nodeRadius - 4) + offset;
+            const QPointF tail = to - direction * 12;
+            const QColor color(edge.rejected ? "#aa382a" : "#775c32");
+            QPen pen(color, 3, edge.rejected ? Qt::DashLine : Qt::SolidLine);
             p.setPen(pen);
-            p.drawLine(QPointF(from, y), QPointF(to, y));
+            p.drawLine(from, to);
             p.setPen(Qt::NoPen);
             p.setBrush(color);
             QPolygonF arrow;
-            arrow << QPointF(to, y) << QPointF(tail, y - 5) << QPointF(tail, y + 5);
+            arrow << to << tail + normal * 5 << tail - normal * 5;
             p.drawPolygon(arrow);
-            p.setPen(color);
-            p.setFont(font());
-            const QString resource = QString::fromStdString(edge.resource);
-            const QString label = edge.rejected ? "Rejected request for " + resource : "Waiting for " + resource;
-            p.drawText(QRectF(left + 3, y + (forward ? -52 : 20), right - left - 6, 30),
-                       Qt::AlignCenter | Qt::TextWordWrap, label);
+            if (nodes.size() <= 4) {
+                p.setPen(color);
+                const auto label = (from + to) / 2 + normal * 15;
+                const auto resource = QString::fromStdString(edge.resource);
+                p.drawText(QRectF(label.x() - 90, label.y() - 10, 180, 20), Qt::AlignCenter,
+                           p.fontMetrics().elidedText(resource, Qt::ElideRight, 178));
+            }
         }
-        p.setFont(strong);
-        for (int i = 0; i < 2; ++i) {
-            const auto node = i == 0 ? first : second;
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            const auto worker = std::find(result_->workers.begin(), result_->workers.end(), edges[i].waiter);
+            const auto number = std::distance(result_->workers.begin(), worker) + 1;
             p.setPen(QColor("#b6aa9c"));
             p.setBrush(QColor("#f1e9dd"));
-            p.drawRoundedRect(node, 8, 8);
+            p.drawEllipse(nodes[i], nodeRadius, nodeRadius);
             p.setPen(QColor("#322a23"));
-            p.drawText(node, Qt::AlignCenter, QString("Worker %1").arg(i + 1));
+            p.drawText(QRectF(nodes[i].x() - 25, nodes[i].y() - 25, 50, 50), Qt::AlignCenter,
+                       QString("Job %1").arg(static_cast<int>(number)));
         }
-        p.setFont(font());
-        p.drawText(QRectF(10, height() - 40, width() - 20, 30), Qt::AlignCenter,
-                   "Arrows point from the requesting worker to the resource owner.");
     }
 };

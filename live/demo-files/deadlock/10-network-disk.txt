@@ -1,7 +1,20 @@
-BuildQueue deadlock case v1
+BuildQueue deadlock case v2
+Jobs: 8
 Lock first: Network buffer
 Lock second: Disk buffer
 Lock first: Disk buffer
+Lock second: Cache
+Lock first: Cache
+Lock second: Index
+Lock first: Index
+Lock second: Journal
+Lock first: Journal
+Lock second: Catalog
+Lock first: Catalog
+Lock second: Metadata
+Lock first: Metadata
+Lock second: Archive
+Lock first: Archive
 Lock second: Network buffer
 
-Checksum workload for Network buffer and Disk buffer.
+Checksum workload for a multi-job resource cycle.

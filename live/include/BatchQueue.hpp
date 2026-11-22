@@ -7,6 +7,7 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 namespace bq {
 enum class Policy { Fcfs, Priority, Sjf, RoundRobin };
@@ -70,6 +71,7 @@ public:
     BatchQueue& operator=(const BatchQueue&) = delete;
 
     void setPolicy(Policy policy);
+    void pauseDispatch(bool paused);
     std::vector<std::uint64_t> submit(const std::vector<std::string>& files, int priority);
     std::vector<std::uint64_t> submit(const std::vector<JobRequest>& requests);
     bool cancel(std::uint64_t id);
@@ -102,5 +104,6 @@ private:
     int running_ = 0;
     int peak_ = 0;
     bool stopping_ = false;
+    bool paused_ = false;
 };
 }

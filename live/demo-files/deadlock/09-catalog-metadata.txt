@@ -1,7 +1,12 @@
-BuildQueue deadlock case v1
+BuildQueue deadlock case v2
+Jobs: 4
 Lock first: Catalog
 Lock second: Metadata
 Lock first: Metadata
+Lock second: Search index
+Lock first: Search index
+Lock second: Journal
+Lock first: Journal
 Lock second: Catalog
 
-Checksum workload for Catalog and Metadata.
+Checksum workload for a multi-job resource cycle.

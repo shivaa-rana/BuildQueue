@@ -213,7 +213,7 @@ ChecksumResult Checksum::run(const std::string& name, std::chrono::milliseconds 
 
 ChecksumResult Checksum::runPath(const std::filesystem::path& path,
                                 std::chrono::milliseconds timeout, std::uint64_t addressSpaceBytes,
-                                BufferPool* pool) {
+                                BufferPool* pool, const std::atomic<bool>* stopped) {
     if (!path.is_absolute() || path.native().find('\0') != std::string::npos) {
         ChecksumResult result;
         result.error = "Choose a local file with an absolute path.";
@@ -221,12 +221,19 @@ ChecksumResult Checksum::runPath(const std::filesystem::path& path,
     }
     static BufferPool defaultPool;
     return runInput(::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC),
-                    timeout, addressSpaceBytes, pool ? *pool : defaultPool);
+                    timeout, addressSpaceBytes, pool ? *pool : defaultPool, stopped);
 }
 
 ChecksumResult Checksum::runInput(int descriptor, std::chrono::milliseconds timeout,
-                                  std::uint64_t addressSpaceBytes, BufferPool& pool) try {
+                                  std::uint64_t addressSpaceBytes, BufferPool& pool,
+                                  const std::atomic<bool>* stopped) try {
     ChecksumResult result;
+    if (stopped && stopped->load()) {
+        ::close(descriptor);
+        result.exitCode = 125;
+        result.error = "Checksum job stopped.";
+        return result;
+    }
     Descriptor input(descriptor);
     if (input.get() < 0) {
         result.error = std::string("Could not open file: ") + std::strerror(errno);
@@ -299,15 +306,18 @@ ChecksumResult Checksum::runInput(int descriptor, std::chrono::milliseconds time
             return result;
         }
         const bool timedOut = std::chrono::steady_clock::now() >= deadline;
-        if (timedOut || !result.error.empty()) {
+        const bool interrupted = stopped && stopped->load();
+        if (interrupted || timedOut || !result.error.empty()) {
             ::kill(pid, SIGKILL);
             do {
                 waited = ::wait4(pid, &status, 0, &usage);
             } while (waited < 0 && errno == EINTR);
             if (waited == pid)
                 result.peakRssKiB = usage.ru_maxrss;
-            result.exitCode = timedOut ? 124 : 1;
-            if (timedOut)
+            result.exitCode = interrupted ? 125 : timedOut ? 124 : 1;
+            if (interrupted)
+                result.error = "Checksum job stopped.";
+            else if (timedOut)
                 result.error = "Checksum process timed out.";
             return result;
         }

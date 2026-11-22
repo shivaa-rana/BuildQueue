@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -40,7 +41,8 @@ class Checksum {
     int directory_;
     mutable BufferPool pool_;
     static ChecksumResult runInput(int descriptor, std::chrono::milliseconds timeout,
-                                   std::uint64_t addressSpaceBytes, BufferPool& pool);
+                                   std::uint64_t addressSpaceBytes, BufferPool& pool,
+                                   const std::atomic<bool>* stopped = nullptr);
     static std::optional<ChecksumResult> sliceInput(int descriptor, ChecksumProgress&, BufferPool&);
 
 public:
@@ -63,6 +65,6 @@ public:
         const std::filesystem::path& path,
         std::chrono::milliseconds timeout = std::chrono::minutes(2),
         std::uint64_t addressSpaceBytes = defaultMemoryMiB * bytesPerMiB,
-        BufferPool* pool = nullptr);
+        BufferPool* pool = nullptr, const std::atomic<bool>* stopped = nullptr);
 };
 }

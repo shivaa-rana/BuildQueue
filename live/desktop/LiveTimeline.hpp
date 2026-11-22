@@ -91,7 +91,8 @@ protected:
             const auto shortName = filename.mid(filename.lastIndexOf('/') + 1);
             const QString state = live ? "Running" : job.state == State::Queued ? "Queued" :
                                   job.state == State::Completed ? "Completed" :
-                                  job.state == State::Cancelled ? "Cancelled" : "Failed";
+                                  job.state == State::Cancelled ? "Cancelled" :
+                                  job.result.exitCode == 124 ? "Timed out" : "Failed";
             p.setPen(QColor("#322a23"));
             p.drawText(QRect(12, y, left - 23, 20), Qt::AlignVCenter,
                        metrics.elidedText(ordinal + "  " + shortName, Qt::ElideMiddle, left - 23));

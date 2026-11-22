@@ -198,21 +198,30 @@ struct Comparison {
 };
 
 std::vector<Comparison> comparePolicies(const std::vector<JobRequest>& requests, int slots,
-                                        int memoryMiB, Fit fit) {
+                                        int memoryMiB, Fit fit, const std::atomic<bool>* stopped) {
     BufferPool buffers;
     buffers.setFit(fit);
     std::vector<Comparison> results;
     for (auto policy : {Policy::Fcfs, Policy::Sjf, Policy::Priority, Policy::RoundRobin}) {
+        if (stopped->load())
+            return {};
         BatchQueue queue(slots, slots, [&](const std::string& path) {
-            return Checksum::runPath(path, std::chrono::minutes(2), memoryMiB * bytesPerMiB, &buffers);
+            return Checksum::runPath(path, std::chrono::minutes(2), memoryMiB * bytesPerMiB, &buffers, stopped);
         }, Input::AbsolutePaths, [](const std::string& path) { return Checksum::pathSize(path); },
         [&](const std::string& path, ChecksumProgress& progress) {
+            if (stopped->load()) {
+                ChecksumResult interrupted;
+                interrupted.exitCode = 125;
+                return std::optional<ChecksumResult>(interrupted);
+            }
             return Checksum::slicePath(path, progress, buffers);
         });
         queue.setPolicy(policy);
         // Submit all jobs together so every policy sees the same initial queue.
         queue.submit(requests);
         queue.waitUntilIdle();
+        if (stopped->load())
+            return {};
         auto jobs = queue.snapshot().jobs;
         std::sort(jobs.begin(), jobs.end(), [](const Job& a, const Job& b) {
             return a.dispatchOrder < b.dispatchOrder;
@@ -223,12 +232,15 @@ std::vector<Comparison> comparePolicies(const std::vector<JobRequest>& requests,
 }
 
 class Desktop : public QWidget {
+    std::atomic<bool> stopped_{false};
+    bool restartComparison_ = false;
+    QString restartCase_;
     std::atomic<int> memoryMiB_{defaultMemoryMiB};
     BufferPool buffers_;
     Fit fit_ = Fit::First;
     BatchQueue queue_{4, 2, [this](const std::string& file) {
                           return Checksum::runPath(file, std::chrono::minutes(2),
-                                                   memoryMiB_.load() * bytesPerMiB, &buffers_);
+                                                   memoryMiB_.load() * bytesPerMiB, &buffers_, &stopped_);
                       },
                       Input::AbsolutePaths, [](const std::string& file) { return Checksum::pathSize(file); },
                       [this](const std::string& file, ChecksumProgress& progress) {
@@ -251,7 +263,13 @@ class Desktop : public QWidget {
     QComboBox* demoCase_ = new QComboBox(this);
     WaitForGraph* waitGraph_ = new WaitForGraph(this);
     QLabel* recoveryResult_ = new QLabel("Upload one deadlock file to run its two live checksum jobs.", this);
+    std::mutex cycleMutex_;
+    std::optional<RecoveryDemoResult> activeCycle_;
     std::future<RecoveryDemoResult> recovery_;
+    QCheckBox* waitForTimeout_ = new QCheckBox("Wait for timeout (10 s)", this);
+    QString currentCase_;
+    QPushButton* stopAll_ = new QPushButton("Stop all", this);
+    QPushButton* resume_ = new QPushButton("Resume", this);
     QString lockJobName_;
     int timelinePage_ = -1;
     QLabel* timelineScale_ = new QLabel(this);
@@ -351,6 +369,29 @@ public:
         heading->setObjectName("pageTitle");
         header->addWidget(heading);
         header->addStretch();
+        header->addWidget(stopAll_);
+        header->addWidget(resume_);
+        resume_->setEnabled(false);
+        connect(stopAll_, &QPushButton::clicked, this, [this] {
+            queue_.pauseDispatch(true);
+            restartComparison_ = comparison_.valid();
+            restartCase_ = recovery_.valid() ? currentCase_ : QString();
+            stopped_ = true;
+            status_->showMessage("Stopping active work. Unfinished work will restart on Resume.");
+            refresh();
+        });
+        connect(resume_, &QPushButton::clicked, this, [this] {
+            stopped_ = false;
+            queue_.pauseDispatch(false);
+            status_->showMessage("Dispatch resumed.", 4000);
+            if (restartComparison_)
+                startComparison();
+            if (!restartCase_.isEmpty())
+                startLockedJobs(restartCase_);
+            restartComparison_ = false;
+            restartCase_.clear();
+            refresh();
+        });
         auto* add = new QPushButton("Add files", this);
         add->setObjectName("addFiles");
         add->setToolTip("Browse local and mounted Windows drives, or drop files on the window.");
@@ -607,6 +648,7 @@ public:
         demoControls->addWidget(runRecovery_);
         demoControls->addStretch();
         deadlockRows->addLayout(demoControls);
+        deadlockRows->addWidget(waitForTimeout_);
         recoveryResult_->setObjectName("solver");
         recoveryResult_->setWordWrap(true);
         recoveryResult_->setTextFormat(Qt::PlainText);
@@ -685,7 +727,7 @@ protected:
 
 private:
     void startComparison() {
-        if (comparison_.valid())
+        if (stopped_ || comparison_.valid())
             return;
         const auto snapshot = queue_.snapshot();
         std::vector<JobRequest> batch;
@@ -696,7 +738,7 @@ private:
             return;
         try {
             comparison_ = std::async(std::launch::async, comparePolicies, std::move(batch),
-                                     compareSlots_->value(), memoryMiB_.load(), fit_);
+                                     compareSlots_->value(), memoryMiB_.load(), fit_, &stopped_);
             compare_->setEnabled(false);
             comparisonTable_->setRowCount(0);
             comparisonInfo_->setText("Running all four policies on the same files…");
@@ -712,7 +754,11 @@ private:
             return;
         status_->clearMessage();
         try {
-            showComparison(comparison_.get());
+            auto results = comparison_.get();
+            if (results.empty() && stopped_)
+                comparisonInfo_->setText("Comparison stopped. Resume restarts it.");
+            else
+                showComparison(results);
         } catch (const std::exception& error) {
             comparisonInfo_->setText("Comparison failed. " + QString::fromUtf8(error.what()));
             status_->showMessage(QString::fromUtf8(error.what()), 7000);
@@ -854,6 +900,11 @@ private:
 
     void refresh() {
         auto snapshot = queue_.snapshot();
+        stopAll_->setEnabled(!stopped_);
+        resume_->setEnabled(stopped_ && snapshot.running == 0 && !comparison_.valid() && !recovery_.valid());
+        runRecovery_->setEnabled(!stopped_ && !recovery_.valid());
+        uploadLockJobs_->setEnabled(!stopped_ && !recovery_.valid());
+        waitForTimeout_->setEnabled(!recovery_.valid() && (!stopped_ || restartCase_.isEmpty()));
         const auto current = std::find_if(snapshot.jobs.begin(), snapshot.jobs.end(), [&](const Job& job) {
             return job.id >= firstCurrentJob_;
         });
@@ -867,7 +918,7 @@ private:
                                                 [](const Job& job) { return job.state != State::Cancelled; }));
         const auto availableJobs = std::count_if(current, snapshot.jobs.end(),
                                                 [](const Job& job) { return job.state != State::Cancelled; });
-        compare_->setEnabled(!busy && !comparison_.valid() && availableJobs > 0 && availableJobs <= 100);
+        compare_->setEnabled(!stopped_ && !busy && !comparison_.valid() && availableJobs > 0 && availableJobs <= 100);
         const auto pool = buffers_.stats();
         poolMap_->setBlocks(pool.blocks);
         memoryTable_->setRowCount(static_cast<int>(pool.blocks.size()));
@@ -937,7 +988,14 @@ private:
             file->setData(JobId, QVariant::fromValue<qulonglong>(job.id));
             if (job.id == selectedId)
                 selectedRow = row;
-            auto* state = cell(row, Status, stateName(job.state));
+            auto label = stateName(job.state);
+            if (job.state == State::Failed && job.result.exitCode == 124)
+                label = "Timed out";
+            else if (stopped_ && job.state == State::Queued)
+                label = "Held";
+            else if (stopped_ && job.state == State::Running)
+                label = "Stopping";
+            auto* state = cell(row, Status, label);
             state->setToolTip(QString::fromStdString(job.result.error));
             if (job.state == State::Completed) {
                 ++completed;
@@ -1038,35 +1096,75 @@ private:
     }
 
     void startLockedJobs(const QString& file) {
-        if (recovery_.valid())
+        if (stopped_ || recovery_.valid())
             return;
         const auto path = QFile::encodeName(file).toStdString();
         try {
             lockJobName_ = QFileInfo(file).fileName();
-            recovery_ = std::async(std::launch::async, [path] { return runLockedChecksumFile(path); });
+            currentCase_ = file;
+            const auto timeout = waitForTimeout_->isChecked() ? std::chrono::seconds(10) : std::chrono::seconds(0);
+            recovery_ = std::async(std::launch::async, [this, path, timeout] {
+                return runLockedChecksumFile(path, timeout, &stopped_, [this](const RecoveryDemoResult& cycle) {
+                    std::lock_guard<std::mutex> lock(cycleMutex_);
+                    activeCycle_ = cycle;
+                });
+            });
             runRecovery_->setEnabled(false);
             uploadLockJobs_->setEnabled(false);
             demoCase_->setEnabled(false);
             waitGraph_->setCycle(std::nullopt);
-            recoveryResult_->setText("Processing " + lockJobName_ + " with two jobs...");
+            recoveryResult_->setText("Starting lock jobs from " + lockJobName_ + "...");
         } catch (const std::exception& error) {
             recoveryResult_->setText(QString::fromUtf8(error.what()));
         }
     }
 
     void finishRecoveryDemo() {
+        std::optional<RecoveryDemoResult> cycle;
+        {
+            std::lock_guard<std::mutex> lock(cycleMutex_);
+            cycle.swap(activeCycle_);
+        }
+        if (cycle) {
+            auto summary = QString("Deadlock detected in %1").arg(lockJobName_);
+            for (const auto& edge : cycle->detection.cycleEdges) {
+                const auto waiter = std::find(cycle->workers.begin(), cycle->workers.end(), edge.waiter);
+                const auto owner = std::find(cycle->workers.begin(), cycle->workers.end(), edge.owner);
+                summary += QString("\nJob %1: %2 %3 (held by Job %4)")
+                    .arg(static_cast<int>(std::distance(cycle->workers.begin(), waiter) + 1))
+                    .arg(edge.rejected ? "Rejected request for" : "Waiting for")
+                    .arg(QString::fromStdString(edge.resource))
+                    .arg(static_cast<int>(std::distance(cycle->workers.begin(), owner) + 1));
+            }
+            recoveryResult_->setText(summary);
+            waitGraph_->setCycle(std::move(cycle));
+        }
         if (!recovery_.valid() ||
             recovery_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
             return;
-        runRecovery_->setEnabled(true);
-        uploadLockJobs_->setEnabled(true);
+        runRecovery_->setEnabled(!stopped_);
+        uploadLockJobs_->setEnabled(!stopped_);
         demoCase_->setEnabled(true);
         try {
             const auto result = recovery_.get();
-            auto summary = QString("%1: Recovered. %2 of 2 jobs finished.\n"
-                        "%3 cycle detected. Job %4 was retried after its lock was released.")
+            const auto count = static_cast<int>(result.workers.size());
+            if (result.stopped || result.timedOut) {
+                auto summary = QString("%1: %2. %3 cycle(s) detected.")
+                    .arg(lockJobName_).arg(result.stopped ? "Stopped" : "Timed out")
+                    .arg(static_cast<qulonglong>(result.detection.count));
+                for (int i = 0; i < count; ++i)
+                    summary += QString("\nJob %1: %2").arg(i + 1)
+                        .arg(result.checksums[i].exitCode == 0 ? "Completed" : result.stopped ? "Stopped" : "Timed out");
+                recoveryResult_->setText(summary);
+                if (result.detection.count)
+                    waitGraph_->setCycle(result);
+                return;
+            }
+            auto summary = QString("%1: Recovered. %2 of %3 jobs finished.\n"
+                        "%4 cycle detected. Job %5 was retried after its lock was released.")
                     .arg(lockJobName_)
                     .arg(result.completed)
+                    .arg(count)
                     .arg(static_cast<qulonglong>(result.detection.count))
                     .arg(result.victim);
             for (std::size_t i = 0; i < result.checksums.size(); ++i)

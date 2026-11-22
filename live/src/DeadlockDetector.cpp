@@ -1,6 +1,7 @@
 #include "DeadlockDetector.hpp"
 
 #include <exception>
+#include <algorithm>
 #include <sstream>
 #include <utility>
 
@@ -15,7 +16,8 @@ TrackedMutex::TrackedMutex(DeadlockDetector& detector, std::string name)
 
 bool TrackedMutex::closesCycle(std::thread::id requester) const {
     const TrackedMutex* resource = this;
-    while (resource->owner_ != std::thread::id{}) {
+    for (std::size_t hops = 0; hops <= detector_.waiting_.size() &&
+         resource->owner_ != std::thread::id{}; ++hops) {
         if (resource->owner_ == requester)
             return true;
         auto next = detector_.waiting_.find(resource->owner_);
@@ -42,29 +44,59 @@ std::vector<WaitForEdge> TrackedMutex::captureCycle(std::thread::id requester) c
 }
 
 void TrackedMutex::lock() {
+    acquire(std::chrono::steady_clock::time_point::max(), nullptr, false, {});
+}
+
+bool TrackedMutex::lockUntil(std::chrono::steady_clock::time_point deadline,
+                            const std::atomic<bool>* stopped, bool holdCycle,
+                            const std::function<void(const DeadlockReport&)>& onCycle) {
+    return acquire(deadline, stopped, holdCycle, onCycle);
+}
+
+bool TrackedMutex::acquire(std::chrono::steady_clock::time_point deadline,
+                          const std::atomic<bool>* stopped, bool holdCycle,
+                          const std::function<void(const DeadlockReport&)>& onCycle) {
+    using Clock = std::chrono::steady_clock;
+    const auto interrupted = [&] { return (stopped && stopped->load()) || Clock::now() >= deadline; };
     const auto requester = std::this_thread::get_id();
     std::unique_lock<std::mutex> graphLock(detector_.graphMutex_);
+    if (interrupted())
+        return false;
     if (owner_ != std::thread::id{}) {
         if (closesCycle(requester)) {
             auto edges = captureCycle(requester);
+            edges.front().rejected = !holdCycle;
             std::ostringstream description;
             description << "Thread " << requester;
             for (const auto& edge : edges)
                 description << " waits for " << edge.resource << " held by thread " << edge.owner;
             auto message = description.str();
             detector_.report_ = {detector_.report_.count + 1, message, std::move(edges)};
-            throw DeadlockDetected(message);
+            if (onCycle)
+                onCycle(detector_.report_);
+            if (!holdCycle)
+                throw DeadlockDetected(message);
         }
         detector_.waiting_.emplace(requester, this);
         try {
-            available_.wait(graphLock, [this] { return owner_ == std::thread::id{}; });
+            while (owner_ != std::thread::id{} && !interrupted()) {
+                if (stopped)
+                    available_.wait_until(graphLock, std::min(deadline, Clock::now() + std::chrono::milliseconds(20)));
+                else if (deadline == Clock::time_point::max())
+                    available_.wait(graphLock);
+                else
+                    available_.wait_until(graphLock, deadline);
+            }
         } catch (...) {
             detector_.waiting_.erase(requester);
             throw;
         }
         detector_.waiting_.erase(requester);
     }
+    if (interrupted())
+        return false;
     owner_ = requester;
+    return true;
 }
 
 void TrackedMutex::unlock() noexcept {

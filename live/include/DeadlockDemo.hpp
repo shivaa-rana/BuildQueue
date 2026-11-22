@@ -20,9 +20,9 @@ inline constexpr std::array<RecoveryCase, 10> recoveryCases{{
     {"05-backup-index.txt", "Backup and index"},
     {"06-cache-journal.txt", "Cache and journal"},
     {"07-compiler-linker.txt", "Compiler and linker"},
-    {"08-reader-writer.txt", "Reader and writer"},
-    {"09-catalog-metadata.txt", "Catalog and metadata"},
-    {"10-network-disk.txt", "Network and disk"},
+    {"08-reader-writer.txt", "Reader and writer (3 jobs)"},
+    {"09-catalog-metadata.txt", "Catalog and metadata (4 jobs)"},
+    {"10-network-disk.txt", "Network and disk (8 jobs)"},
 }};
 
 struct RecoveryDemoResult {
@@ -30,9 +30,14 @@ struct RecoveryDemoResult {
     int victim = 0;
     int completed = 0;
     bool recovered = false;
-    std::array<std::thread::id, 2> workers;
-    std::array<ChecksumResult, 2> checksums;
+    std::vector<std::thread::id> workers;
+    std::vector<ChecksumResult> checksums;
+    bool timedOut = false;
+    bool stopped = false;
 };
 
-RecoveryDemoResult runLockedChecksumFile(const std::filesystem::path& file);
+using CycleObserver = std::function<void(const RecoveryDemoResult&)>;
+RecoveryDemoResult runLockedChecksumFile(
+    const std::filesystem::path& file, std::chrono::milliseconds waitForTimeout = {},
+    const std::atomic<bool>* stopped = nullptr, const CycleObserver& onCycle = {});
 }

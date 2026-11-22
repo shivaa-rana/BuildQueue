@@ -58,32 +58,30 @@ int main(int argc, char** argv) {
     for (const auto& scenario : bq::recoveryCases) {
         const auto file = folder / scenario.filename;
         std::ifstream fixture(file);
-        std::string header, first, second;
-        if (!std::getline(fixture, header) || !std::getline(fixture, first) ||
-            !std::getline(fixture, second) || first.rfind("Lock first: ", 0) != 0 ||
-            second.rfind("Lock second: ", 0) != 0) {
-            std::cerr << "FAIL: invalid fixture " << scenario.filename << '\n';
-            return 1;
+        std::string header, countLine;
+        std::getline(fixture, header);
+        std::size_t count = 2;
+        if (header == "BuildQueue deadlock case v2") {
+            std::getline(fixture, countLine);
+            count = static_cast<std::size_t>(countLine.at(6) - '0');
         }
-        const std::array<std::string, 2> lockNames{first.substr(12), second.substr(13)};
         const auto expected = bq::Checksum::runPath(std::filesystem::absolute(file));
         if (expected.exitCode != 0)
             return 1;
         const auto recovery = bq::runLockedChecksumFile(file);
         const auto& edges = recovery.detection.cycleEdges;
-        if (!recovery.recovered || recovery.completed != 2 || recovery.detection.count != 1 ||
-            recovery.victim < 1 || recovery.victim > 2 || edges.size() != 2) {
-            std::cerr << "FAIL: expected one cycle and recovery of both jobs in " << scenario.filename << '\n';
+        if (!recovery.recovered || recovery.completed != static_cast<int>(count) ||
+            recovery.detection.count != 1 || recovery.victim < 1 ||
+            recovery.victim > static_cast<int>(count) || edges.size() != count ||
+            !edges.front().rejected || edges.front().waiter != recovery.workers[recovery.victim - 1]) {
+            std::cerr << "FAIL: incomplete cycle or recovery in " << scenario.filename << '\n';
             return 1;
         }
-        const auto victim = recovery.victim - 1;
-        if (!edges[0].rejected || edges[1].rejected ||
-            edges[0].waiter != recovery.workers[victim] ||
-            edges[0].owner != recovery.workers[1 - victim] ||
-            edges[1].waiter != edges[0].owner || edges[1].owner != edges[0].waiter ||
-            edges[0].resource != lockNames[1 - victim] || edges[1].resource != lockNames[victim]) {
-            std::cerr << "FAIL: graph has incorrect directions or lock names\n";
-            return 1;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (edges[i].owner != edges[(i + 1) % count].waiter || (i && edges[i].rejected)) {
+                std::cerr << "FAIL: wait-for edges must form a directed cycle\n";
+                return 1;
+            }
         }
         for (const auto& result : recovery.checksums) {
             if (result.exitCode != 0 || result.checksum != expected.checksum ||
@@ -93,6 +91,23 @@ int main(int argc, char** argv) {
             }
         }
         std::cout << "PASS: " << scenario.filename << " detected a cycle and recovered both jobs\n";
+    }
+    const auto multi = folder / "09-catalog-metadata.txt";
+    bool observed = false;
+    const auto timeout = bq::runLockedChecksumFile(multi, std::chrono::milliseconds(500), nullptr,
+        [&](const bq::RecoveryDemoResult& live) {
+            observed = live.detection.cycleEdges.size() == 4 && !live.detection.cycleEdges.front().rejected;
+        });
+    if (!observed || !timeout.timedOut || timeout.recovered || timeout.completed != 0) {
+        std::cerr << "FAIL: expected an observed four-job cycle followed by timeout\n";
+        return 1;
+    }
+    std::atomic<bool> stopped{false};
+    const auto interrupted = bq::runLockedChecksumFile(multi, std::chrono::seconds(10), &stopped,
+        [&](const bq::RecoveryDemoResult&) { stopped = true; });
+    if (!interrupted.stopped || interrupted.timedOut || interrupted.completed != 0) {
+        std::cerr << "FAIL: Stop all did not release a waiting cycle\n";
+        return 1;
     }
     try {
         bq::runLockedChecksumFile(folder.parent_path() / "README.txt");

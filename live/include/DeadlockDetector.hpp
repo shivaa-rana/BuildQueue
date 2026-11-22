@@ -8,6 +8,9 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <atomic>
+#include <chrono>
+#include <functional>
 
 namespace bq {
 class TrackedMutex;
@@ -47,9 +50,15 @@ public:
     TrackedMutex(const TrackedMutex&) = delete;
     TrackedMutex& operator=(const TrackedMutex&) = delete;
     void lock();
+    bool lockUntil(std::chrono::steady_clock::time_point deadline,
+                   const std::atomic<bool>* stopped, bool holdCycle,
+                   const std::function<void(const DeadlockReport&)>& onCycle);
     void unlock() noexcept;
 
 private:
+    bool acquire(std::chrono::steady_clock::time_point deadline,
+                 const std::atomic<bool>* stopped, bool holdCycle,
+                 const std::function<void(const DeadlockReport&)>& onCycle);
     bool closesCycle(std::thread::id requester) const;
     std::vector<WaitForEdge> captureCycle(std::thread::id requester) const;
 
