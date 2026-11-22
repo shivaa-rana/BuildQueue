@@ -90,7 +90,8 @@ function renderTimeline(jobs) {
     const track = document.createElement("div");
     track.className = "timeline-track";
     const details = `Job ${job.id}, ${job.file}. ${job.state}. Submitted at ${time(job.submitted_ms)}. Queued for ${time(job.wait_ms)}.`
-      + (job.run_ms === null ? "" : ` Processing time ${time(job.run_ms)}.`);
+      + (job.run_ms === null ? "" : ` Processing time ${time(job.run_ms)}.`)
+      + (job.timeline_truncated ? " Timeline shows only the first 256 slices." : "");
     track.setAttribute("role", "img");
     track.setAttribute("aria-label", details);
     track.title = details;

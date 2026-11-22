@@ -540,7 +540,7 @@ public:
         resultOptions->addWidget(details);
         jobsRows->addLayout(resultOptions);
         auto showDetails = [this](bool visible) {
-            for (auto column : {Size, Priority, Dispatch, Crc, Pid, Memory})
+            for (auto column : {Size, Priority, Dispatch, Pid, Memory})
                 table_->setColumnHidden(column, !visible);
         };
         connect(details, &QCheckBox::toggled, this, showDetails);
@@ -929,7 +929,7 @@ private:
             cell(row, Wait, duration(times.waiting));
             cell(row, Run, times.started ? duration(times.running) : QString());
             cell(row, Arrival, duration(times.offset));
-            const bool finished = job.finished != Clock::time_point{} && job.state != State::Cancelled;
+            const bool finished = job.finished != Clock::time_point{};
             cell(row, Completion, finished ? duration(milliseconds(job.finished - origin)) : QString());
             cell(row, Turnaround, finished ? duration(milliseconds(job.finished - job.submitted)) : QString());
             auto* bar = cell(row, Timeline, {});
