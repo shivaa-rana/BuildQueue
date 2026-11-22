@@ -167,6 +167,8 @@ void scheduling(Policy policy) {
     for (const auto& job : snapshot.jobs) {
         if (job.state == State::Cancelled) {
             require(job.dispatchOrder == 0, "Cancelled jobs should have no dispatch order.");
+            require(job.finished - job.submitted == job.waitTime(job.finished),
+                    "Cancellation before dispatch should count all elapsed time as waiting.");
             continue;
         }
         require(job.dispatchOrder > 0 && job.dispatchOrder <= expected.size(),
@@ -244,7 +246,7 @@ int main() {
         scheduling(bq::Policy::Sjf);
         roundRobinRotation();
         concurrency();
-        std::cout << "PASS: real checksum process, FCFS, Priority, SJF, cancellation and concurrency\n";
+        std::cout << "PASS: real checksum process, FCFS, Priority, SJF, Round Robin, cancellation and concurrency\n";
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
