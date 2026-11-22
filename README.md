@@ -36,3 +36,7 @@ The Deadlock workspace opens one case file at a time. Cases 01–07 run two jobs
 
 
 On Windows, extract the repository ZIP and double-click **Start BuildQueue.cmd**. It uses Ubuntu under WSL 2 with WSLg and the usual Qt build dependencies.
+
+### Timeline scheduling
+
+Timeline defaults to **FCFS** on a fresh launch and shares its scheduling selector with Jobs. Choose **FCFS**, **SJF**, **Priority**, or **Round Robin**. Add files or click **Rerun batch** after the batch finishes to measure a fresh run. The subtitle gives the dispatch policies recorded in the chart, so queued policy changes do not relabel past work.
