@@ -5,9 +5,9 @@
 #include <utility>
 
 namespace bq {
-BatchQueue::BatchQueue(int workers, int slots, Work work, Input input, Estimate estimate)
+BatchQueue::BatchQueue(int workers, int slots, Work work, Input input, Estimate estimate, SliceWork slice)
     : slots_(slots), input_(input), work_(std::move(work)), estimate_(std::move(estimate)),
-      permits_(slots, detector_),
+      slice_(std::move(slice)), permits_(slots, detector_),
       mutex_(detector_, "job queue") {
     if (workers < 1 || workers > 16 || slots > workers || !work_)
         throw std::invalid_argument("Use 1 to 16 workers and 1 to workers slots.");
@@ -34,6 +34,11 @@ void BatchQueue::stop() {
 
 void BatchQueue::setPolicy(Policy policy) {
     std::lock_guard<TrackedMutex> lock(mutex_);
+    if (policy == Policy::RoundRobin && !slice_)
+        throw std::invalid_argument("Round Robin requires a resumable checksum worker.");
+    if (policy != policy_ && (queued_ > 0 || running_ > 0) &&
+        (policy == Policy::RoundRobin || policy_ == Policy::RoundRobin))
+        throw std::invalid_argument("Finish the active batch before switching to or from Round Robin.");
     policy_ = policy;
 }
 
@@ -79,6 +84,8 @@ std::vector<std::uint64_t> BatchQueue::submit(const std::vector<JobRequest>& req
         for (auto& job : batch) {
             job.id = nextId_++;
             job.submitted = now;
+            job.readySince = now;
+            job.readyOrder = nextReady_++;
             ids.push_back(job.id);
             jobs_.push_back(std::move(job));
         }
@@ -100,6 +107,7 @@ bool BatchQueue::cancel(std::uint64_t id) {
             return false;
         job->state = State::Cancelled;
         job->finished = Job::Clock::now();
+        job->waited += job->finished - job->readySince;
         --queued_;
     }
     changed_.notify_all();
@@ -136,7 +144,8 @@ std::vector<Job>::iterator BatchQueue::nextJob() {
         const bool higherPriority = policy_ == Policy::Priority && job->priority < selected->priority;
         const bool shorter = policy_ == Policy::Sjf && job->estimatedBytes &&
             (!selected->estimatedBytes || *job->estimatedBytes < *selected->estimatedBytes);
-        if (higherPriority || shorter)
+        const bool earlierSlice = policy_ == Policy::RoundRobin && job->readyOrder < selected->readyOrder;
+        if (higherPriority || shorter || earlierSlice)
             selected = job;
     }
     return selected;
@@ -146,6 +155,8 @@ void BatchQueue::worker() {
     for (;;) {
         std::uint64_t id;
         std::string file;
+        ChecksumProgress progress;
+        bool sliced;
         {
             std::unique_lock<TrackedMutex> lock(mutex_);
             changed_.wait(lock, [this] {
@@ -156,28 +167,52 @@ void BatchQueue::worker() {
             auto job = nextJob();
             id = job->id;
             file = job->file;
+            progress = job->progress;
+            sliced = policy_ == Policy::RoundRobin;
+            const auto now = Job::Clock::now();
+            job->waited += now - job->readySince;
+            job->sliceStarted = now;
             job->state = State::Running;
-            job->dispatchOrder = nextDispatch_++;
-            job->dispatchPolicy = policy_;
-            job->started = Job::Clock::now();
+            if (!job->dispatchOrder) {
+                job->dispatchOrder = nextDispatch_++;
+                job->dispatchPolicy = policy_;
+                job->started = now;
+            }
             --queued_;
             ++running_;
             peak_ = std::max(peak_, running_);
         }
 
-        ChecksumResult result;
+        std::optional<ChecksumResult> result;
         try {
-            result = work_(file);
+            if (sliced)
+                result = slice_(file, progress);
+            else
+                result = work_(file);
         } catch (const std::exception& error) {
-            result.error = error.what();
+            result.emplace().error = error.what();
         }
 
         {
             std::lock_guard<TrackedMutex> lock(mutex_);
             auto job = std::find_if(jobs_.begin(), jobs_.end(), [id](const Job& j) { return j.id == id; });
-            job->state = result.error.empty() && result.exitCode == 0 ? State::Completed : State::Failed;
-            job->result = std::move(result);
-            job->finished = Job::Clock::now();
+            const auto now = Job::Clock::now();
+            job->executed += now - job->sliceStarted;
+            if (job->slices.size() < 256)
+                job->slices.emplace_back(job->sliceStarted, now);
+            else
+                job->timelineTruncated = true;
+            if (result) {
+                job->state = result->error.empty() && result->exitCode == 0 ? State::Completed : State::Failed;
+                job->result = std::move(*result);
+                job->finished = now;
+            } else {
+                job->progress = progress;
+                job->state = State::Queued;
+                job->readySince = now;
+                job->readyOrder = nextReady_++;
+                ++queued_;
+            }
             --running_;
             permits_.release();
         }

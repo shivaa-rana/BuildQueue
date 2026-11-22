@@ -159,6 +159,7 @@ void scheduling(Policy policy) {
         case Policy::Fcfs: expected = {"first", "low", "unknown", "high", "high-tie"}; break;
         case Policy::Priority: expected = {"first", "high", "high-tie", "low", "unknown"}; break;
         case Policy::Sjf: expected = {"first", "high", "low", "high-tie", "unknown"}; break;
+        case Policy::RoundRobin: throw std::logic_error("Use the dedicated Round Robin test.");
     }
     require(didCancel, "Queued job should be cancellable.");
     require(started == expected, "Jobs ran in the wrong order.");
@@ -208,6 +209,32 @@ void concurrency() {
 }
 }
 
+void roundRobinRotation() {
+    using namespace bq;
+    std::vector<std::string> turns;
+    BatchQueue queue(1, 1, [](const std::string&) { return ChecksumResult{}; },
+                     Input::FolderNames, {},
+                     [&](const std::string& file, ChecksumProgress& progress) -> std::optional<ChecksumResult> {
+        turns.push_back(file);
+        if (++progress.offset < 2)
+            return std::nullopt;
+        ChecksumResult result;
+        result.exitCode = 0;
+        return result;
+    });
+    queue.setPolicy(Policy::RoundRobin);
+    queue.submit({"a", "b", "c"}, 0);
+    queue.waitUntilIdle();
+    require(turns == std::vector<std::string>{"a", "b", "c", "a", "b", "c"},
+            "Round Robin must send unfinished jobs to the back of the ready queue.");
+    for (const auto& job : queue.snapshot().jobs) {
+        require(job.state == State::Completed && job.slices.size() == 2,
+                "Each job should record two processing slices.");
+        require(job.finished - job.submitted == job.waitTime(job.finished) + job.burstTime(job.finished),
+                "Turnaround should equal waiting plus burst time.");
+    }
+}
+
 int main() {
     try {
         bufferAllocation();
@@ -215,6 +242,7 @@ int main() {
         scheduling(bq::Policy::Fcfs);
         scheduling(bq::Policy::Priority);
         scheduling(bq::Policy::Sjf);
+        roundRobinRotation();
         concurrency();
         std::cout << "PASS: real checksum process, FCFS, Priority, SJF, cancellation and concurrency\n";
     } catch (const std::exception& error) {

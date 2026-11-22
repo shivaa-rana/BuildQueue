@@ -38,7 +38,7 @@ The desktop app shares the C++ scheduler, semaphore, process launcher, and deadl
 
 To compare algorithms, add files of varied sizes, let the batch finish, choose a different scheduling policy, and click **Rerun batch**. BuildQueue runs the same files again with their original priorities. Use **Show previous batch** to compare the timelines and average wait times. The **Dispatch** column shows the actual start order and policy used for each job. With two execution slots, add at least three files so some jobs have to wait. For Priority comparisons, submit groups with different batch priorities before rerunning them.
 
-**Compare all policies** runs the current batch under FCFS, SJF, and Priority in three separate queues and shows measured average wait, total elapsed time, completed count, and dispatch order side by side. Choose one comparison slot to see a sequential dispatch order, or two to observe concurrent scheduling. Each run uses the same paths, priorities, slot count, memory limit, and buffer allocation policy. Timings can vary with filesystem caching and system load.
+**Compare all policies** runs the current batch under FCFS, SJF, Priority, and Round Robin in three separate queues and shows measured average wait, total elapsed time, completed count, and dispatch order side by side. Choose one comparison slot to see a sequential dispatch order, or two to observe concurrent scheduling. Each run uses the same paths, priorities, slot count, memory limit, and buffer allocation policy. Timings can vary with filesystem caching and system load.
 
 ## Command line
 
@@ -95,3 +95,9 @@ Run `make test-deadlock` to demonstrate detection with two real threads and two 
 - Siddharth Singh (992401030026)
 
 Operating Systems Lab, Batch F1, Jaypee Institute of Information Technology.
+
+### Round Robin and the desktop dashboard
+
+Round Robin reads up to 1 MiB per turn and returns unfinished checksum jobs to the ready queue. Its work runs inside the application with a bounded read buffer. The process memory limit and child PID/RSS apply to the policies that spawn `cksum`.
+
+The Jobs table shows arrival, burst, completion, turnaround, and waiting times. Finished jobs are listed by completion time. Open Analysis to compare all four policies and inspect the checksum buffer pool.

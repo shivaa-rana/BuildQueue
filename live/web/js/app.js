@@ -60,8 +60,7 @@ function renderTimeline(jobs) {
     return;
   }
 
-  const duration = (job) => job.wait_ms + (job.run_ms ?? 0);
-  const span = Math.max(1, ...jobs.map((job) => job.submitted_ms + duration(job)));
+  const span = Math.max(1, ...jobs.map((job) => job.elapsed_ms));
   const percent = (ms) => `${(ms / span) * 100}%`;
   const tick = (fraction) => {
     const label = document.createElement("span");
@@ -95,9 +94,10 @@ function renderTimeline(jobs) {
     track.setAttribute("role", "img");
     track.setAttribute("aria-label", details);
     track.title = details;
-    track.append(segment("waiting", job.submitted_ms, job.wait_ms));
-    if (job.run_ms !== null)
-      track.append(segment("processing", job.submitted_ms + job.wait_ms, job.run_ms));
+    const end = job.timeline_truncated ? job.slices.at(-1)[1] : job.elapsed_ms;
+    track.append(segment("waiting", job.submitted_ms, end - job.submitted_ms));
+    for (const [start, finish] of job.slices)
+      track.append(segment("processing", start, finish - start));
     rows.append(name, track);
   }
   el("timeline-rows").replaceChildren(rows);
@@ -128,8 +128,11 @@ function row(job) {
   const memory = cell(job.peak_rss_kib == null ? "-" : `${job.peak_rss_kib} KiB`, "numeric");
   if (job.memory_limit_bytes != null)
     memory.title = `Address-space limit: ${job.memory_limit_bytes / (1024 * 1024)} MiB`;
-  cell(time(job.wait_ms), "numeric");
+  cell(time(job.submitted_ms), "numeric");
   cell(time(job.run_ms), "numeric");
+  cell(time(job.completion_ms), "numeric");
+  cell(time(job.turnaround_ms), "numeric");
+  cell(time(job.wait_ms), "numeric");
   const action = cell("");
   if (job.state === "Queued") {
     const cancel = document.createElement("button");
@@ -165,8 +168,10 @@ async function loadJobs() {
     // Keep the active cancel control in place while the user is navigating by keyboard.
     const focus = document.activeElement;
     const label = el("jobs").contains(focus) ? focus.getAttribute("aria-label") : null;
-    el("jobs").replaceChildren(...snapshot.jobs.map(row));
-    renderTimeline(snapshot.jobs);
+    const jobs = snapshot.jobs.slice().sort((a, b) =>
+      (a.completion_ms ?? Infinity) - (b.completion_ms ?? Infinity) || a.id - b.id);
+    el("jobs").replaceChildren(...jobs.map(row));
+    renderTimeline(jobs);
     if (label) for (const button of el("jobs").querySelectorAll("button")) {
       if (button.getAttribute("aria-label") === label) button.focus();
     }

@@ -47,13 +47,22 @@ def main():
         assert cli_job["state"] == "Completed"
         assert cli_job["checksum"] == int(expected[0])
         large = root / "multichunk.bin"
-        large.write_bytes(bytes(range(256)) * 3200)
+        large.write_bytes(bytes(range(256)) * 8800)
         expected_large = subprocess.check_output(["cksum", str(large)]).split()
         streamed = subprocess.run(command + ["--file", large.name], capture_output=True,
                                   check=True, timeout=10)
         streamed_job = json.loads(streamed.stdout)["jobs"][0]
         assert streamed_job["checksum"] == int(expected_large[0])
         assert streamed_job["bytes"] == int(expected_large[1])
+        rr = subprocess.run(command + ["--policy", "rr", "--file", large.name, "--file", file.name],
+                            capture_output=True, check=True, timeout=10)
+        rr_jobs = json.loads(rr.stdout)["jobs"]
+        assert rr_jobs[0]["checksum"] == int(expected_large[0])
+        assert len(rr_jobs[0]["slices"]) == 3
+        assert rr_jobs[1]["checksum"] == int(expected[0])
+        assert rr_jobs[0]["pid"] is None
+        for job in rr_jobs:
+            assert abs(job["turnaround_ms"] - job["wait_ms"] - job["run_ms"]) < 0.01
         large.unlink()
 
         with socket.socket() as listener:
