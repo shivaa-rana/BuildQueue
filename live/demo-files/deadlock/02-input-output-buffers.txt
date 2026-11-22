@@ -1,5 +1,7 @@
-BuildQueue lock job v1
+BuildQueue deadlock case v1
 Lock first: Input buffer
 Lock second: Output buffer
+Lock first: Output buffer
+Lock second: Input buffer
 
 Checksum workload for Input buffer and Output buffer.

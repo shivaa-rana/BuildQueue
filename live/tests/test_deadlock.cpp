@@ -56,67 +56,48 @@ int main(int argc, char** argv) {
               << "PASS: one request was rejected and the other worker finished\n";
     const auto folder = std::filesystem::path(argc > 1 ? argv[1] : "demo-files/deadlock");
     for (const auto& scenario : bq::recoveryCases) {
-        const auto pair = folder / scenario.directory;
-        const auto firstFile = pair / "resource-a.txt";
-        const auto secondFile = pair / "resource-b.txt";
-        std::string firstName, secondName;
-        std::ifstream firstInput(firstFile), secondInput(secondFile);
-        std::string header;
-        if (!std::getline(firstInput, header) || !std::getline(firstInput, firstName) ||
-            !std::getline(secondInput, header) || !std::getline(secondInput, secondName) ||
-            firstName.rfind("Lock first: ", 0) != 0 || secondName.rfind("Lock first: ", 0) != 0 ||
-            firstName == secondName) {
-            std::cerr << "FAIL: invalid resource fixture in " << scenario.directory << '\n';
+        const auto file = folder / scenario.filename;
+        std::ifstream fixture(file);
+        std::string header, first, second;
+        if (!std::getline(fixture, header) || !std::getline(fixture, first) ||
+            !std::getline(fixture, second) || first.rfind("Lock first: ", 0) != 0 ||
+            second.rfind("Lock second: ", 0) != 0) {
+            std::cerr << "FAIL: invalid fixture " << scenario.filename << '\n';
             return 1;
         }
-        firstName = firstName.substr(12);
-        secondName = secondName.substr(12);
-        const auto expectedA = bq::Checksum::runPath(std::filesystem::absolute(firstFile));
-        const auto expectedB = bq::Checksum::runPath(std::filesystem::absolute(secondFile));
-        if (expectedA.exitCode != 0 || expectedB.exitCode != 0)
+        const std::array<std::string, 2> lockNames{first.substr(12), second.substr(13)};
+        const auto expected = bq::Checksum::runPath(std::filesystem::absolute(file));
+        if (expected.exitCode != 0)
             return 1;
-        for (int attempt = 0; attempt < 4; ++attempt) {
-            const bool reversed = attempt % 2 == 1;
-            const auto recovery = bq::runLockedChecksumPair(reversed ? secondFile : firstFile,
-                                                            reversed ? firstFile : secondFile);
-            const auto& edges = recovery.detection.cycleEdges;
-            if (!recovery.recovered || recovery.completed != 2 || recovery.detection.count != 1 ||
-                (recovery.victim != 1 && recovery.victim != 2) || edges.size() != 2) {
-                std::cerr << "FAIL: expected one cycle and recovery of both jobs in " << scenario.directory << '\n';
-                return 1;
-            }
-            const auto victim = recovery.victim - 1;
-            const auto& workerOneResource = reversed ? secondName : firstName;
-            const auto& workerTwoResource = reversed ? firstName : secondName;
-            if (!edges[0].rejected || edges[1].rejected ||
-                edges[0].waiter != recovery.workers[victim] ||
-                edges[0].owner != recovery.workers[1 - victim] ||
-                edges[1].waiter != edges[0].owner || edges[1].owner != edges[0].waiter ||
-                edges[0].resource != (victim == 0 ? workerTwoResource : workerOneResource) ||
-                edges[1].resource != (victim == 0 ? workerOneResource : workerTwoResource)) {
-                std::cerr << "FAIL: cycle graph has incorrect directions or resource labels\n";
-                return 1;
-            }
-            const auto& actualA = recovery.checksums[reversed ? 1 : 0];
-            const auto& actualB = recovery.checksums[reversed ? 0 : 1];
-            if (actualA.checksum != expectedA.checksum || actualB.checksum != expectedB.checksum ||
-                actualA.bytes != std::filesystem::file_size(firstFile) ||
-                actualB.bytes != std::filesystem::file_size(secondFile)) {
-                std::cerr << "FAIL: recovery did not checksum the entire contents of both files\n";
+        const auto recovery = bq::runLockedChecksumFile(file);
+        const auto& edges = recovery.detection.cycleEdges;
+        if (!recovery.recovered || recovery.completed != 2 || recovery.detection.count != 1 ||
+            recovery.victim < 1 || recovery.victim > 2 || edges.size() != 2) {
+            std::cerr << "FAIL: expected one cycle and recovery of both jobs in " << scenario.filename << '\n';
+            return 1;
+        }
+        const auto victim = recovery.victim - 1;
+        if (!edges[0].rejected || edges[1].rejected ||
+            edges[0].waiter != recovery.workers[victim] ||
+            edges[0].owner != recovery.workers[1 - victim] ||
+            edges[1].waiter != edges[0].owner || edges[1].owner != edges[0].waiter ||
+            edges[0].resource != lockNames[1 - victim] || edges[1].resource != lockNames[victim]) {
+            std::cerr << "FAIL: graph has incorrect directions or lock names\n";
+            return 1;
+        }
+        for (const auto& result : recovery.checksums) {
+            if (result.exitCode != 0 || result.checksum != expected.checksum ||
+                result.bytes != std::filesystem::file_size(file)) {
+                std::cerr << "FAIL: both jobs must checksum the entire selected file\n";
                 return 1;
             }
         }
-        std::cout << "PASS: " << scenario.title << " showed two directed waits and checksummed both files\n";
+        std::cout << "PASS: " << scenario.filename << " detected a cycle and recovered both jobs\n";
     }
-    const auto fileA = folder / bq::recoveryCases[0].directory / "resource-a.txt";
-    const auto unrelated = folder / bq::recoveryCases[1].directory / "resource-b.txt";
-    for (const auto& invalid : {fileA, unrelated, folder.parent_path() / "README.txt"}) {
-        try {
-            bq::runLockedChecksumPair(fileA, invalid);
-            std::cerr << "FAIL: accepted an invalid lock-job pair\n";
-            return 1;
-        } catch (const std::invalid_argument&) {
-        }
+    try {
+        bq::runLockedChecksumFile(folder.parent_path() / "README.txt");
+        std::cerr << "FAIL: accepted a file without a deadlock header\n";
+        return 1;
+    } catch (const std::invalid_argument&) {
     }
-    std::cout << "PASS: rejected duplicate, unrelated and ordinary files\n";
 }

@@ -1,5 +1,7 @@
-BuildQueue lock job v1
+BuildQueue deadlock case v1
 Lock first: Account record
 Lock second: Ledger record
+Lock first: Ledger record
+Lock second: Account record
 
 Checksum workload for Account record and Ledger record.

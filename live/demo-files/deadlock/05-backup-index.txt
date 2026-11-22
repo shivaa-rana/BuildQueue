@@ -1,5 +1,7 @@
-BuildQueue lock job v1
+BuildQueue deadlock case v1
 Lock first: Backup record
 Lock second: Index record
+Lock first: Index record
+Lock second: Backup record
 
 Checksum workload for Backup record and Index record.

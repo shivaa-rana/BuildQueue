@@ -8,16 +8,21 @@
 
 namespace bq {
 struct RecoveryCase {
-    const char* directory;
+    const char* filename;
     const char* title;
 };
 
-inline constexpr std::array<RecoveryCase, 5> recoveryCases{{
-    {"01-printer-and-scanner", "Printer and scanner"},
-    {"02-input-and-output-buffers", "Input and output buffers"},
-    {"03-inventory-and-orders", "Inventory and orders"},
-    {"04-accounts-and-ledger", "Accounts and ledger"},
-    {"05-backup-and-index", "Backup and index"},
+inline constexpr std::array<RecoveryCase, 10> recoveryCases{{
+    {"01-printer-scanner.txt", "Printer and scanner"},
+    {"02-input-output-buffers.txt", "Input and output buffers"},
+    {"03-inventory-orders.txt", "Inventory and orders"},
+    {"04-accounts-ledger.txt", "Accounts and ledger"},
+    {"05-backup-index.txt", "Backup and index"},
+    {"06-cache-journal.txt", "Cache and journal"},
+    {"07-compiler-linker.txt", "Compiler and linker"},
+    {"08-reader-writer.txt", "Reader and writer"},
+    {"09-catalog-metadata.txt", "Catalog and metadata"},
+    {"10-network-disk.txt", "Network and disk"},
 }};
 
 struct RecoveryDemoResult {
@@ -29,6 +34,5 @@ struct RecoveryDemoResult {
     std::array<ChecksumResult, 2> checksums;
 };
 
-RecoveryDemoResult runLockedChecksumPair(const std::filesystem::path& firstFile,
-                                         const std::filesystem::path& secondFile);
+RecoveryDemoResult runLockedChecksumFile(const std::filesystem::path& file);
 }

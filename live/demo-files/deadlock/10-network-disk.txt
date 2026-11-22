@@ -1,0 +1,7 @@
+BuildQueue deadlock case v1
+Lock first: Network buffer
+Lock second: Disk buffer
+Lock first: Disk buffer
+Lock second: Network buffer
+
+Checksum workload for Network buffer and Disk buffer.

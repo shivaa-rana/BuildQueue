@@ -31,7 +31,7 @@ protected:
         p.fillRect(rect(), QColor("#fffdf9"));
         p.setPen(QColor("#322a23"));
         if (!result_) {
-            p.drawText(rect(), Qt::AlignCenter, "Upload a lock-job pair to capture the wait-for graph.");
+            p.drawText(rect(), Qt::AlignCenter, "Upload one deadlock file to capture the wait-for graph.");
             return;
         }
 

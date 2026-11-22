@@ -1,5 +1,0 @@
-BuildQueue lock job v1
-Lock first: Scanner
-Lock second: Printer
-
-Checksum workload for Scanner and Printer.
