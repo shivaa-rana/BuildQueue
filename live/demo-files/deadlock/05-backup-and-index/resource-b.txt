@@ -1,0 +1,2 @@
+Index record
+Worker 2 holds this resource and asks for Backup record.

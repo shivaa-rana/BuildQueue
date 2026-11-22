@@ -1,0 +1,2 @@
+Inventory record
+Worker 1 holds this resource and asks for Order record.

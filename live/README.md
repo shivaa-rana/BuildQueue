@@ -101,3 +101,9 @@ Operating Systems Lab, Batch F1, Jaypee Institute of Information Technology.
 Round Robin reads up to 1 MiB per turn and returns unfinished checksum jobs to the ready queue. Its work runs inside the application with a bounded read buffer. The process memory limit and child PID/RSS apply to the policies that spawn `cksum`.
 
 The Jobs table shows arrival, burst, completion, turnaround, and waiting times. Finished jobs are listed by completion time. Open Analysis to compare all four policies and inspect the checksum buffer pool.
+
+### Deadlock recovery demonstration
+
+In the Qt desktop app, open **Deadlock**, choose a resource pair and click **Run recovery demo**. There are five pairs (ten files) in `demo-files/deadlock`. The graph keeps the detected cycle visible after recovery. Each arrow points from a waiting worker to the resource owner. A dashed red arrow marks the rejected request. The expected result is one detected cycle and two completed workers after retry. The **Timeline** tab shows queued and running intervals on a shared elapsed-time axis.
+
+On Windows, extract the repository ZIP and double-click **Start BuildQueue.cmd**. It uses Ubuntu under WSL 2 with WSLg and the usual Qt build dependencies.

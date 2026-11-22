@@ -1,4 +1,7 @@
 #include "BatchQueue.hpp"
+#include "DeadlockDemo.hpp"
+#include "LiveTimeline.hpp"
+#include "WaitForGraph.hpp"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -17,6 +20,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -241,6 +245,13 @@ class Desktop : public QWidget {
     QStackedWidget* workspaces_ = new QStackedWidget(this);
     QStackedWidget* jobResults_ = new QStackedWidget(this);
     QLabel* solver_ = new QLabel(this);
+    LiveTimeline* graph_ = new LiveTimeline(this);
+    QPushButton* runRecovery_ = new QPushButton("Run recovery demo", this);
+    QComboBox* demoCase_ = new QComboBox(this);
+    WaitForGraph* waitGraph_ = new WaitForGraph(this);
+    QLabel* recoveryResult_ = new QLabel("Choose a resource pair and run the demo.", this);
+    std::future<RecoveryDemoResult> recovery_;
+    int timelinePage_ = -1;
     QLabel* timelineScale_ = new QLabel(this);
     QLabel* policyHelp_ = new QLabel(this);
     QLabel* priorityLabel_ = new QLabel("Batch priority", this);
@@ -360,6 +371,9 @@ public:
         };
         auto* jobsRows = addWorkspace("Jobs");
         auto* compareRows = addWorkspace("Analysis");
+        auto* timelineRows = addWorkspace("Timeline");
+        timelinePage_ = workspaces_->count() - 1;
+        auto* deadlockRows = addWorkspace("Deadlock");
         navigation->addStretch();
         connect(pages, &QButtonGroup::idClicked, workspaces_, &QStackedWidget::setCurrentIndex);
         auto showPage = [pages, heading](int index) {
@@ -368,6 +382,7 @@ public:
             heading->setText(button->text());
         };
         connect(workspaces_, &QStackedWidget::currentChanged, this, showPage);
+        connect(workspaces_, &QStackedWidget::currentChanged, this, [this] { refresh(); });
         showPage(workspaces_->currentIndex());
         body->addWidget(workspaces_, 1);
 
@@ -567,8 +582,37 @@ public:
         solver_->setObjectName("solver");
         solver_->setTextFormat(Qt::PlainText);
         solver_->setWordWrap(true);
-        compareRows->addWidget(solver_);
         compareRows->addStretch();
+        auto* graphHint = new QLabel("Elapsed time from first submission. Tan: queued. Green: processing. Blue: running now.", this);
+        graphHint->setWordWrap(true);
+        timelineRows->addWidget(graphHint);
+        auto* scroll = new QScrollArea(this);
+        scroll->setWidgetResizable(true);
+        scroll->setWidget(graph_);
+        timelineRows->addWidget(scroll, 1);
+
+        auto* demoHint = new QLabel("Two workers request the bundled demo files in opposite order. "
+                                    "After cycle detection, the rejected worker releases its lock and its work is retried.", this);
+        demoHint->setWordWrap(true);
+        deadlockRows->addWidget(demoHint);
+        auto* demoControls = new QHBoxLayout;
+        demoCase_->setAccessibleName("Demo resource pair");
+        for (const auto& scenario : recoveryCases)
+            demoCase_->addItem(QString::fromUtf8(scenario.title), QString::fromUtf8(scenario.directory));
+        demoControls->addWidget(new QLabel("Demo resources", this));
+        demoControls->addWidget(demoCase_);
+        demoControls->addWidget(runRecovery_);
+        demoControls->addStretch();
+        deadlockRows->addLayout(demoControls);
+        recoveryResult_->setObjectName("solver");
+        recoveryResult_->setWordWrap(true);
+        recoveryResult_->setTextFormat(Qt::PlainText);
+        recoveryResult_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        deadlockRows->addWidget(recoveryResult_);
+        deadlockRows->addWidget(waitGraph_, 1);
+        compareRows->addWidget(solver_);
+        deadlockRows->addStretch();
+        connect(runRecovery_, &QPushButton::clicked, this, [this] { startRecoveryDemo(); });
         body->addWidget(status_);
 
         connect(add, &QPushButton::clicked, this, [this] { chooseFiles(); });
@@ -595,6 +639,7 @@ public:
         auto* timer = new QTimer(this);
         connect(timer, &QTimer::timeout, this, [this] {
             finishComparison();
+            finishRecoveryDemo();
             refresh();
         });
         timer->start(300);
@@ -604,8 +649,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override {
-        if (comparison_.valid()) {
-            status_->showMessage("Wait for the scheduling comparison to finish before closing.", 5000);
+        if (comparison_.valid() || recovery_.valid()) {
+            status_->showMessage("Wait for the comparison or recovery demo to finish before closing.", 5000);
             event->ignore();
             return;
         }
@@ -861,6 +906,8 @@ private:
             timings.push_back(times);
             span = std::max(span, times.offset + times.waiting + times.running);
         }
+        if (workspaces_->currentIndex() == timelinePage_)
+            graph_->setJobs(snapshot.jobs, origin, now, span);
 
         const auto* selected = table_->item(table_->currentRow(), File);
         const auto selectedId = selected ? selected->data(JobId).toULongLong() : 0;
@@ -967,6 +1014,48 @@ private:
         if (!snapshot.deadlocks.lastCycle.empty())
             solverText += "\n" + QString::fromStdString(snapshot.deadlocks.lastCycle);
         solver_->setText(solverText);
+    }
+
+    void startRecoveryDemo() {
+        if (recovery_.valid())
+            return;
+        const auto relative = "demo-files/deadlock/" + demoCase_->currentData().toString();
+        QDir demo(QDir::current().filePath(relative));
+        if (!demo.exists())
+            demo = QDir(QDir(QCoreApplication::applicationDirPath()).filePath(relative));
+        const auto a = QFile::encodeName(demo.absoluteFilePath("resource-a.txt")).toStdString();
+        const auto b = QFile::encodeName(demo.absoluteFilePath("resource-b.txt")).toStdString();
+        try {
+            recovery_ = std::async(std::launch::async, [a, b] { return runRecoveryDemo(a, b); });
+            runRecovery_->setEnabled(false);
+            demoCase_->setEnabled(false);
+            waitGraph_->setCycle(std::nullopt);
+            recoveryResult_->setText("Running " + demoCase_->currentText() + "...");
+        } catch (const std::exception& error) {
+            recoveryResult_->setText(QString::fromUtf8(error.what()));
+        }
+    }
+
+    void finishRecoveryDemo() {
+        if (!recovery_.valid() ||
+            recovery_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return;
+        runRecovery_->setEnabled(true);
+        demoCase_->setEnabled(true);
+        try {
+            const auto result = recovery_.get();
+            recoveryResult_->setText(
+                QString("%1: Recovered. %2 of 2 workers finished.\n"
+                        "%3 cycle detected. Worker %4 released its lock and its work was retried. "
+                        "The graph preserves the cycle for inspection.")
+                    .arg(demoCase_->currentText())
+                    .arg(result.completed)
+                    .arg(static_cast<qulonglong>(result.detection.count))
+                    .arg(result.victim));
+            waitGraph_->setCycle(result);
+        } catch (const std::exception& error) {
+            recoveryResult_->setText(QString("Demo failed: %1").arg(QString::fromUtf8(error.what())));
+        }
     }
 };
 }

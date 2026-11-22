@@ -1,5 +1,13 @@
 BuildQueue | Live batch file-checksum manager
 
+Start on Windows
+- Extract the ZIP to a local folder and open Start BuildQueue.cmd.
+- Requires the Ubuntu WSL 2 distribution with Linux graphical app support
+  and the build packages below. The first launch builds the Qt application.
+- Keep demo-files next to Start BuildQueue.cmd. Open Deadlock and select
+  Run recovery demo to detect a cycle and finish both workers.
+- Open Timeline for the live graph in first-dispatch order.
+
 Requirements
 - Linux, or Ubuntu under WSL2 on Windows
 - C++17 compiler, Make and GNU coreutils (/usr/bin/cksum)
