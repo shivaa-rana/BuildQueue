@@ -21,6 +21,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -273,6 +274,9 @@ class Desktop : public QWidget {
     QString lockJobName_;
     int timelinePage_ = -1;
     QLabel* timelineScale_ = new QLabel(this);
+    QComboBox* timelinePolicy_ = new QComboBox(this);
+    QPushButton* timelineReplay_ = new QPushButton("Rerun batch", this);
+    QLabel* timelineRunPolicy_ = new QLabel(this);
     QLabel* policyHelp_ = new QLabel(this);
     QLabel* priorityLabel_ = new QLabel("Batch priority", this);
     QSpinBox* priority_ = new QSpinBox(this);
@@ -628,6 +632,20 @@ public:
         compareRows->addStretch();
         auto* graphHint = new QLabel("Elapsed time from first submission. Tan: queued. Green: processing. Blue: running now.", this);
         graphHint->setWordWrap(true);
+        auto* timelineControls = new QHBoxLayout;
+        auto* timelineLabel = new QLabel("Scheduling policy", this);
+        timelineLabel->setBuddy(timelinePolicy_);
+        timelinePolicy_->setAccessibleName("Scheduling policy");
+        for (const auto value : {Policy::Fcfs, Policy::Sjf, Policy::Priority, Policy::RoundRobin})
+            timelinePolicy_->addItem(policyName(value), static_cast<int>(value));
+        timelineReplay_->setToolTip("Run the current batch again using the selected scheduling policy.");
+        timelineControls->addWidget(timelineLabel);
+        timelineControls->addWidget(timelinePolicy_);
+        timelineControls->addWidget(timelineReplay_);
+        timelineControls->addStretch();
+        timelineRows->addLayout(timelineControls);
+        timelineRunPolicy_->setWordWrap(true);
+        timelineRows->addWidget(timelineRunPolicy_);
         timelineRows->addWidget(graphHint);
         auto* scroll = new QScrollArea(this);
         scroll->setWidgetResizable(true);
@@ -667,14 +685,22 @@ public:
         body->addWidget(status_);
 
         connect(add, &QPushButton::clicked, this, [this] { chooseFiles(); });
-        connect(policy, &QButtonGroup::idClicked, this, [this, policy](int id) {
+        auto selectPolicy = [this, policy](int id) {
             try {
                 choosePolicy(static_cast<Policy>(id));
             } catch (const std::exception& error) {
-                policy->button(static_cast<int>(queue_.snapshot().policy))->setChecked(true);
                 status_->showMessage(QString::fromUtf8(error.what()), 7000);
             }
+            const auto selected = static_cast<int>(queue_.snapshot().policy);
+            policy->button(selected)->setChecked(true);
+            const QSignalBlocker block(timelinePolicy_);
+            timelinePolicy_->setCurrentIndex(timelinePolicy_->findData(selected));
+        };
+        connect(policy, &QButtonGroup::idClicked, this, selectPolicy);
+        connect(timelinePolicy_, &QComboBox::currentIndexChanged, this, [this, selectPolicy](int index) {
+            selectPolicy(timelinePolicy_->itemData(index).toInt());
         });
+        connect(timelineReplay_, &QPushButton::clicked, this, [this] { rerunBatch(); });
         connect(cancel, &QPushButton::clicked, this, [this] {
             const auto* item = table_->item(table_->currentRow(), File);
             if (!item || !queue_.cancel(item->data(JobId).toULongLong()))
@@ -827,6 +853,8 @@ private:
     }
 
     void rerunBatch() {
+        if (stopped_ || comparison_.valid())
+            return;
         const auto snapshot = queue_.snapshot();
         if (std::any_of(snapshot.jobs.begin(), snapshot.jobs.end(), [](const Job& job) {
                 return job.state == State::Queued || job.state == State::Running;
@@ -914,10 +942,11 @@ private:
         const bool busy = std::any_of(snapshot.jobs.begin(), snapshot.jobs.end(), [](const Job& job) {
             return job.state == State::Queued || job.state == State::Running;
         });
-        replay_->setEnabled(!busy && !comparison_.valid() && std::any_of(current, snapshot.jobs.end(),
-                                                [](const Job& job) { return job.state != State::Cancelled; }));
         const auto availableJobs = std::count_if(current, snapshot.jobs.end(),
                                                 [](const Job& job) { return job.state != State::Cancelled; });
+        const bool canRerun = !stopped_ && !busy && !comparison_.valid() && availableJobs > 0 && availableJobs <= 100;
+        replay_->setEnabled(canRerun);
+        timelineReplay_->setEnabled(canRerun);
         compare_->setEnabled(!stopped_ && !busy && !comparison_.valid() && availableJobs > 0 && availableJobs <= 100);
         const auto pool = buffers_.stats();
         poolMap_->setBlocks(pool.blocks);
@@ -966,8 +995,19 @@ private:
             timings.push_back(times);
             span = std::max(span, times.offset + times.waiting + times.running);
         }
-        if (workspaces_->currentIndex() == timelinePage_)
+        if (workspaces_->currentIndex() == timelinePage_) {
+            QStringList recorded;
+            for (const auto& job : snapshot.jobs) {
+                const auto name = policyName(job.dispatchPolicy);
+                if (job.dispatchOrder && !recorded.contains(name))
+                    recorded.append(name);
+            }
+            const auto batchLabel = viewingPrevious ? "Previous batch" : "Current batch";
+            timelineRunPolicy_->setText(recorded.isEmpty()
+                ? QString("%1 scheduling: no jobs dispatched yet.").arg(batchLabel)
+                : QString("%1 scheduling: %2").arg(batchLabel).arg(recorded.join(", ")));
             graph_->setJobs(snapshot.jobs, origin, now, span);
+        }
 
         const auto* selected = table_->item(table_->currentRow(), File);
         const auto selectedId = selected ? selected->data(JobId).toULongLong() : 0;
