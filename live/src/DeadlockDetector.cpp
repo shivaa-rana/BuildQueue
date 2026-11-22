@@ -26,17 +26,19 @@ bool TrackedMutex::closesCycle(std::thread::id requester) const {
     return false;
 }
 
-std::string TrackedMutex::describeCycle(std::thread::id requester) const {
-    std::ostringstream cycle;
-    cycle << "Thread " << requester;
+std::vector<WaitForEdge> TrackedMutex::captureCycle(std::thread::id requester) const {
+    std::vector<WaitForEdge> edges;
     auto resource = this;
+    auto waiter = requester;
     do {
-        cycle << " waits for " << resource->name_ << " held by thread " << resource->owner_;
-        if (resource->owner_ == requester)
+        const auto owner = resource->owner_;
+        edges.push_back({waiter, owner, resource->name_, edges.empty()});
+        if (owner == requester)
             break;
-        resource = detector_.waiting_.at(resource->owner_);
+        waiter = owner;
+        resource = detector_.waiting_.at(owner);
     } while (true);
-    return cycle.str();
+    return edges;
 }
 
 void TrackedMutex::lock() {
@@ -44,10 +46,14 @@ void TrackedMutex::lock() {
     std::unique_lock<std::mutex> graphLock(detector_.graphMutex_);
     if (owner_ != std::thread::id{}) {
         if (closesCycle(requester)) {
-            auto cycle = describeCycle(requester);
-            detector_.report_.lastCycle = cycle;
-            ++detector_.report_.count;
-            throw DeadlockDetected(cycle);
+            auto edges = captureCycle(requester);
+            std::ostringstream description;
+            description << "Thread " << requester;
+            for (const auto& edge : edges)
+                description << " waits for " << edge.resource << " held by thread " << edge.owner;
+            auto message = description.str();
+            detector_.report_ = {detector_.report_.count + 1, message, std::move(edges)};
+            throw DeadlockDetected(message);
         }
         detector_.waiting_.emplace(requester, this);
         try {

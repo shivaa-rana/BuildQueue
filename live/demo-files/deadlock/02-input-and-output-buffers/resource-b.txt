@@ -1,0 +1,2 @@
+Output buffer
+Worker 2 holds this resource and asks for Input buffer.

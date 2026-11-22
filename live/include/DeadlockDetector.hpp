@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace bq {
 class TrackedMutex;
@@ -16,9 +17,17 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+struct WaitForEdge {
+    std::thread::id waiter;
+    std::thread::id owner;
+    std::string resource;
+    bool rejected;
+};
+
 struct DeadlockReport {
     std::size_t count = 0;
     std::string lastCycle;
+    std::vector<WaitForEdge> cycleEdges;
 };
 
 class DeadlockDetector {
@@ -42,7 +51,7 @@ public:
 
 private:
     bool closesCycle(std::thread::id requester) const;
-    std::string describeCycle(std::thread::id requester) const;
+    std::vector<WaitForEdge> captureCycle(std::thread::id requester) const;
 
     DeadlockDetector& detector_;
     const std::string name_;
