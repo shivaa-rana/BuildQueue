@@ -4,32 +4,60 @@
 #include <exception>
 #include <fstream>
 #include <functional>
+#include <utility>
 
 namespace bq {
 namespace {
-std::string readResourceLabel(const std::filesystem::path& path) {
+std::string readHeaderLine(std::ifstream& input, const std::filesystem::path& path) {
+    char buffer[96];
+    if (!input.getline(buffer, sizeof(buffer)))
+        throw std::invalid_argument("Missing or too long lock-job header in " + path.filename().string());
+    std::string line(buffer, static_cast<std::size_t>(input.gcount()) - (input.eof() ? 0 : 1));
+    if (!line.empty() && line.back() == '\r')
+        line.pop_back();
+    return line;
+}
+
+std::array<std::string, 2> readLockOrder(const std::filesystem::path& path) {
+    if (!Checksum::pathSize(path))
+        throw std::invalid_argument("Choose a readable regular file: " + path.filename().string());
     std::ifstream input(path);
-    std::string name;
-    if (!std::getline(input, name) || name.empty())
-        throw std::runtime_error("Cannot read demo resource: " + path.string());
-    if (name.back() == '\r')
-        name.pop_back();
-    return name;
+    if (readHeaderLine(input, path) != "BuildQueue lock job v1")
+        throw std::invalid_argument("Choose a BuildQueue lock-job file from demo-files/deadlock: " + path.filename().string());
+    const std::array<std::string, 2> prefixes{"Lock first: ", "Lock second: "};
+    std::array<std::string, 2> order;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        const auto line = readHeaderLine(input, path);
+        if (line.compare(0, prefixes[i].size(), prefixes[i]) != 0 || line.size() == prefixes[i].size())
+            throw std::invalid_argument("Each job must declare both Lock first and Lock second.");
+        order[i] = line.substr(prefixes[i].size());
+        if (order[i].size() > 48 || order[i].find_first_not_of(
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _.-") != std::string::npos)
+            throw std::invalid_argument("Use up to 48 letters, digits, spaces, underscores, periods or hyphens in lock names.");
+    }
+    return order;
 }
 
-void readResource(const std::filesystem::path& path) {
-    std::ifstream input(path, std::ios::binary);
-    char byte;
-    if (!input.get(byte))
-        throw std::runtime_error("Cannot read demo resource: " + path.string());
+ChecksumResult checksumJob(const std::filesystem::path& path) {
+    auto result = Checksum::runPath(path);
+    if (result.exitCode != 0 || !result.error.empty())
+        throw std::runtime_error("Could not checksum " + path.filename().string() + ": " + result.error);
+    return result;
 }
 }
 
-RecoveryDemoResult runRecoveryDemo(const std::filesystem::path& firstFile,
-                                   const std::filesystem::path& secondFile) {
+RecoveryDemoResult runLockedChecksumPair(const std::filesystem::path& firstFile,
+                                         const std::filesystem::path& secondFile) {
+    const std::array<std::filesystem::path, 2> paths{
+        std::filesystem::absolute(firstFile), std::filesystem::absolute(secondFile)};
+    const auto firstOrder = readLockOrder(paths[0]);
+    const auto secondOrder = readLockOrder(paths[1]);
+    if (firstOrder[0] == firstOrder[1] ||
+        firstOrder[0] != secondOrder[1] || firstOrder[1] != secondOrder[0])
+        throw std::invalid_argument("Choose the two files from one pair. They must request the same locks in opposite orders.");
     DeadlockDetector detector;
-    TrackedMutex first(detector, readResourceLabel(firstFile));
-    TrackedMutex second(detector, readResourceLabel(secondFile));
+    TrackedMutex first(detector, firstOrder[0]);
+    TrackedMutex second(detector, firstOrder[1]);
     std::mutex gate;
     std::condition_variable ready;
     int arrivals = 0;
@@ -38,6 +66,7 @@ RecoveryDemoResult runRecoveryDemo(const std::filesystem::path& firstFile,
     std::atomic<int> victim{0};
     std::exception_ptr failures[2];
     std::array<std::thread::id, 2> workers;
+    std::array<ChecksumResult, 2> checksums;
 
     auto attempt = [&](int worker, TrackedMutex& owned, TrackedMutex& requested) {
         try {
@@ -52,8 +81,7 @@ RecoveryDemoResult runRecoveryDemo(const std::filesystem::path& firstFile,
                     return;
             }
             std::lock_guard<TrackedMutex> acquire(requested);
-            readResource(firstFile);
-            readResource(secondFile);
+            checksums[worker - 1] = checksumJob(paths[worker - 1]);
             ++completed;
         } catch (const DeadlockDetected&) {
             victim = worker;
@@ -90,10 +118,9 @@ RecoveryDemoResult runRecoveryDemo(const std::filesystem::path& firstFile,
     {
         std::lock_guard<TrackedMutex> holdFirst(first);
         std::lock_guard<TrackedMutex> holdSecond(second);
-        readResource(firstFile);
-        readResource(secondFile);
+        checksums[victim - 1] = checksumJob(paths[victim - 1]);
         ++completed;
     }
-    return {detector.report(), victim, completed, true, workers};
+    return {detector.report(), victim, completed, true, workers, std::move(checksums)};
 }
 }

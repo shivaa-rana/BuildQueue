@@ -1,2 +1,5 @@
-Index record
-Worker 2 holds this resource and asks for Backup record.
+BuildQueue lock job v1
+Lock first: Index record
+Lock second: Backup record
+
+Checksum workload for Index record and Backup record.

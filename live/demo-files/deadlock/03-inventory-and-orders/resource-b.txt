@@ -1,2 +1,5 @@
-Order record
-Worker 2 holds this resource and asks for Inventory record.
+BuildQueue lock job v1
+Lock first: Order record
+Lock second: Inventory record
+
+Checksum workload for Order record and Inventory record.

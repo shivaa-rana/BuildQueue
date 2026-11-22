@@ -5,7 +5,7 @@ Start on Windows
 - Requires the Ubuntu WSL 2 distribution with Linux graphical app support
   and the build packages below. The first launch builds the Qt application.
 - Keep demo-files next to Start BuildQueue.cmd. Open Deadlock and select
-  Run recovery demo to detect a cycle and finish both workers.
+  Upload lock jobs to select both files from any numbered pair.
 - Open Timeline for the live graph in first-dispatch order.
 
 Requirements
